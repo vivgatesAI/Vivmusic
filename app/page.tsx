@@ -42,24 +42,20 @@ type SavedProject = {
   savedAt: string;
 };
 
+type StepId = 0 | 1 | 2 | 3 | 4;
+
 const STORAGE_KEY = 'vivmusic.projects.v1';
 const API_KEY_STORAGE = 'vivmusic.veniceApiKey';
 
-const quickModes = [
-  {
-    name: 'Simple Create',
-    summary: 'Choose a vibe and get polished musical direction instantly.'
-  },
-  {
-    name: 'Guided Pro',
-    summary: 'Use dashboard controls for structure, mood, arrangement, and producer logic.'
-  },
-  {
-    name: 'Advanced Studio',
-    summary: 'Expose more options only when you want deeper control.'
-  }
-] as const;
+const stepItems = [
+  { id: 0 as StepId, label: 'Access', title: 'Add your Venice key' },
+  { id: 1 as StepId, label: 'Project', title: 'Choose what you are making' },
+  { id: 2 as StepId, label: 'Sound', title: 'Shape the sound' },
+  { id: 3 as StepId, label: 'Details', title: 'Add custom notes' },
+  { id: 4 as StepId, label: 'Create', title: 'Generate your outputs' }
+];
 
+const quickModes = ['Simple Create', 'Guided Pro', 'Advanced Studio'] as const;
 const useCaseOptions = [
   'Launch film / brand soundtrack',
   'Podcast intro',
@@ -68,25 +64,8 @@ const useCaseOptions = [
   'Game cinematic cue',
   'Ad music / social clip'
 ] as const;
-
-const genreOptions = [
-  'Cinematic Electronic',
-  'Ambient',
-  'Orchestral',
-  'Lo-fi',
-  'Indie Pop',
-  'Trailer Score'
-] as const;
-
-const moodOptions = [
-  'Focused',
-  'Uplifting',
-  'Premium',
-  'Emotional',
-  'Dark',
-  'Futuristic'
-] as const;
-
+const genreOptions = ['Cinematic Electronic', 'Ambient', 'Orchestral', 'Lo-fi', 'Indie Pop', 'Trailer Score'] as const;
+const moodOptions = ['Focused', 'Uplifting', 'Premium', 'Emotional', 'Dark', 'Futuristic'] as const;
 const energyOptions = ['Low', 'Medium', 'High'] as const;
 const vocalOptions = ['Instrumental', 'Optional Vocals', 'Vocal Forward'] as const;
 const lengthOptions = ['30 sec', '45 sec', '60 sec', '90 sec'] as const;
@@ -96,29 +75,7 @@ const structureOptions = [
   'Loopable Ambient Flow',
   'Trailer Rise → Impact → Tail'
 ] as const;
-const quickRefinementOptions = [
-  'More emotional',
-  'Cleaner intro',
-  'Bigger lift',
-  'Less clutter',
-  'More premium',
-  'More futuristic'
-] as const;
-
-const workspaceCards = [
-  {
-    title: 'Dashboard-first',
-    text: 'Use presets, chips, and guided selectors instead of writing long prompts from scratch.'
-  },
-  {
-    title: 'Prompt Intelligence',
-    text: 'Venice converts your selections into stronger musical direction automatically.'
-  },
-  {
-    title: 'Browser-Local Projects',
-    text: 'Save, reload, export, and import projects right in the browser with no auth required.'
-  }
-];
+const quickRefinementOptions = ['More emotional', 'Cleaner intro', 'Bigger lift', 'Less clutter', 'More premium', 'More futuristic'] as const;
 
 const producerSuggestions = [
   'Start with less instrumentation in the intro so the lift feels earned.',
@@ -130,8 +87,8 @@ const producerSuggestions = [
 const apiSteps = [
   'Create a Venice account and open your API settings.',
   'Generate a Venice API key for your own use.',
-  'Paste that key into the secure field in the app. In this MVP it is stored in your browser on your machine.',
-  'Use Venice Producer to turn your dashboard selections into pro-grade music direction, lyrics guidance, and refinement ideas.'
+  'Paste the key into the field below. In this MVP it is stored in your browser on your machine.',
+  'Move through the studio one step at a time, then generate your producer plan, lyrics draft, and moodboard.'
 ];
 
 const emptyPlan: ProducerPlan = {
@@ -151,10 +108,7 @@ const emptyLyrics: LyricsDraft = {
 };
 
 function slugify(value: string) {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '') || 'project';
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'project';
 }
 
 function downloadJson(filename: string, data: unknown) {
@@ -187,9 +141,10 @@ function normalizeProject(value: Partial<SavedProject>): SavedProject {
 
 export default function HomePage() {
   const [apiKey, setApiKey] = useState('');
+  const [step, setStep] = useState<StepId>(0);
   const [title, setTitle] = useState('Biotech Launch Theme');
   const [useCase, setUseCase] = useState<(typeof useCaseOptions)[number]>('Launch film / brand soundtrack');
-  const [mode, setMode] = useState<(typeof quickModes)[number]['name']>('Guided Pro');
+  const [mode, setMode] = useState<(typeof quickModes)[number]>('Guided Pro');
   const [genre, setGenre] = useState<(typeof genreOptions)[number]>('Cinematic Electronic');
   const [mood, setMood] = useState<(typeof moodOptions)[number]>('Focused');
   const [energy, setEnergy] = useState<(typeof energyOptions)[number]>('Medium');
@@ -206,7 +161,7 @@ export default function HomePage() {
   const [lyricsLoading, setLyricsLoading] = useState(false);
   const [error, setError] = useState('');
   const [projects, setProjects] = useState<SavedProject[]>([]);
-  const [activeProjectId, setActiveProjectId] = useState<string>('');
+  const [activeProjectId, setActiveProjectId] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
   const [snapshotLabel, setSnapshotLabel] = useState('');
   const importRef = useRef<HTMLInputElement | null>(null);
@@ -224,10 +179,7 @@ export default function HomePage() {
   }, [briefNotes, energy, genre, length, mood, structure, useCase, vocalMode]);
 
   const tags = useMemo(() => [genre, mood, energy, vocalMode, structure], [energy, genre, mood, structure, vocalMode]);
-  const activeProject = useMemo(
-    () => projects.find((project) => project.id === activeProjectId),
-    [projects, activeProjectId]
-  );
+  const activeProject = useMemo(() => projects.find((project) => project.id === activeProjectId), [projects, activeProjectId]);
 
   useEffect(() => {
     try {
@@ -237,9 +189,7 @@ export default function HomePage() {
         const parsed = JSON.parse(storedProjects) as Partial<SavedProject>[];
         setProjects(parsed.map(normalizeProject));
       }
-      if (storedKey) {
-        setApiKey(storedKey);
-      }
+      if (storedKey) setApiKey(storedKey);
     } catch {
       // ignore malformed local state for MVP
     }
@@ -250,11 +200,8 @@ export default function HomePage() {
   }, [projects]);
 
   useEffect(() => {
-    if (apiKey) {
-      localStorage.setItem(API_KEY_STORAGE, apiKey);
-    } else {
-      localStorage.removeItem(API_KEY_STORAGE);
-    }
+    if (apiKey) localStorage.setItem(API_KEY_STORAGE, apiKey);
+    else localStorage.removeItem(API_KEY_STORAGE);
   }, [apiKey]);
 
   function buildProjectRecord(): SavedProject {
@@ -277,7 +224,7 @@ export default function HomePage() {
     setActiveProjectId(project.id);
     setTitle(project.title);
     setUseCase(project.useCase as (typeof useCaseOptions)[number]);
-    setMode(project.mode as (typeof quickModes)[number]['name']);
+    setMode(project.mode as (typeof quickModes)[number]);
     setLyricNotes(project.lyricNotes);
     setImageUrl(project.imageUrl);
     setPlan(project.plan);
@@ -309,13 +256,11 @@ export default function HomePage() {
       lyricsDraft,
       brief
     };
-
     const updatedProject: SavedProject = {
       ...record,
       snapshots: [snapshot, ...(record.snapshots || [])],
       savedAt: new Date().toISOString()
     };
-
     setActiveProjectId(updatedProject.id);
     setProjects((current) => {
       const existing = current.filter((item) => item.id !== updatedProject.id);
@@ -351,31 +296,26 @@ export default function HomePage() {
     setStatusMessage(`Applied refinement: ${refinement}`);
   }
 
+  function nextStep() {
+    setStep((current) => (current < 4 ? ((current + 1) as StepId) : current));
+  }
+
+  function previousStep() {
+    setStep((current) => (current > 0 ? ((current - 1) as StepId) : current));
+  }
+
   async function handleProducerGenerate() {
     setError('');
     setStatusMessage('');
     setPlanLoading(true);
-
     try {
       const response = await fetch('/api/venice/producer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          apiKey,
-          title,
-          brief,
-          useCase,
-          mode,
-          tags,
-          lyricNotes
-        })
+        body: JSON.stringify({ apiKey, title, brief, useCase, mode, tags, lyricNotes })
       });
-
       const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data?.error || 'Unable to generate producer plan.');
-      }
-
+      if (!response.ok) throw new Error(data?.error || 'Unable to generate producer plan.');
       setPlan(data);
       setStatusMessage('Producer plan generated');
     } catch (err) {
@@ -389,19 +329,14 @@ export default function HomePage() {
     setError('');
     setStatusMessage('');
     setImageLoading(true);
-
     try {
       const response = await fetch('/api/venice/image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ apiKey, brief })
       });
-
       const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data?.error || 'Unable to generate moodboard image.');
-      }
-
+      if (!response.ok) throw new Error(data?.error || 'Unable to generate moodboard image.');
       setImageUrl(data.dataUrl);
       setStatusMessage('Moodboard image generated');
     } catch (err) {
@@ -415,26 +350,14 @@ export default function HomePage() {
     setError('');
     setStatusMessage('');
     setLyricsLoading(true);
-
     try {
       const response = await fetch('/api/venice/lyrics', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          apiKey,
-          title,
-          brief,
-          useCase,
-          lyricNotes,
-          optimizedPrompt: plan.optimizedPrompt
-        })
+        body: JSON.stringify({ apiKey, title, brief, useCase, lyricNotes, optimizedPrompt: plan.optimizedPrompt })
       });
-
       const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data?.error || 'Unable to generate lyrics workspace draft.');
-      }
-
+      if (!response.ok) throw new Error(data?.error || 'Unable to generate lyrics workspace draft.');
       setLyricsDraft(data);
       setStatusMessage('Lyrics workspace draft generated');
     } catch (err) {
@@ -447,11 +370,9 @@ export default function HomePage() {
   async function handleImportProject(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
-
     try {
       const text = await file.text();
       const parsed = normalizeProject(JSON.parse(text));
-
       setProjects((current) => {
         const existing = current.filter((item) => item.id !== parsed.id);
         return [parsed, ...existing].sort((a, b) => b.savedAt.localeCompare(a.savedAt));
@@ -466,8 +387,8 @@ export default function HomePage() {
   }
 
   return (
-    <main className="page-shell dashboard-shell">
-      <header className="topbar dashboard-topbar">
+    <main className="page-shell wizard-shell">
+      <header className="topbar wizard-topbar">
         <div className="brand-lockup">
           <div className="brand-mark" />
           <div>
@@ -475,246 +396,234 @@ export default function HomePage() {
             <h1 className="brand-name">Vivmusic</h1>
           </div>
         </div>
-
         <nav className="topnav">
-          <a href="#dashboard">Dashboard</a>
-          <a href="#guidance">Guidance</a>
+          <a href="#wizard">Studio Wizard</a>
+          <a href="#saved-projects">Projects</a>
           <a href="#api-key">API Key</a>
         </nav>
       </header>
 
-      <section className="hero dashboard-hero">
+      <section className="hero wizard-hero">
         <div className="hero-copy">
-          <p className="eyebrow">Dashboard-first music development</p>
-          <h2>Pick. Shape. Refine. Create.</h2>
+          <p className="eyebrow">Step-by-step music development</p>
+          <h2>One decision at a time.</h2>
           <p className="hero-text">
-            Vivmusic now behaves more like a dashboard — fewer blank text fields, more smart controls, faster choices, and less typing to get to a strong musical direction.
+            Vivmusic now walks the user through a seamless guided flow. Users click or add a custom note, then move forward only when they’re ready. They can always go backward.
           </p>
-          <div className="hero-actions">
-            <button className="primary-button" onClick={handleProducerGenerate} disabled={planLoading || !apiKey}>
-              {planLoading ? 'Generating…' : 'Generate plan'}
-            </button>
-            <button className="ghost-button" onClick={saveProjectLocally}>Save project</button>
-          </div>
           {statusMessage ? <p className="status-pill">{statusMessage}</p> : null}
         </div>
-
-        <div className="hero-visual dashboard-hero-visual">
+        <div className="hero-visual wizard-hero-visual">
           <div className="hero-image-card">
-            <img src={imageUrl} alt="Vivmusic dashboard visual" />
+            <img src={imageUrl} alt="Vivmusic wizard visual" />
           </div>
           <div className="floating-panel suggestion-panel">
             <p className="panel-label">Venice Producer</p>
-            <p>{plan.producerNotes[0] || 'Choose your use case, style, mood, and structure. Venice will do the heavy lifting from there.'}</p>
+            <p>{plan.producerNotes[0] || 'Move step by step. Pick the intent, shape the sound, add custom notes, then generate.'}</p>
           </div>
         </div>
       </section>
 
-      <section id="dashboard" className="dashboard-grid">
-        <aside className="dashboard-sidebar canvas-card">
-          <div className="sidebar-section">
-            <p className="panel-label">Quick Create</p>
-            <label>
-              <span className="field-label">Project Title</span>
-              <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Project title" />
-            </label>
+      <section id="wizard" className="wizard-layout">
+        <aside className="canvas-card wizard-sidebar">
+          <p className="panel-label">Studio Flow</p>
+          <div className="step-list">
+            {stepItems.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className={`step-item ${step === item.id ? 'active' : ''} ${step > item.id ? 'complete' : ''}`}
+                onClick={() => setStep(item.id)}
+              >
+                <span className="step-index">{item.id + 1}</span>
+                <span>
+                  <strong>{item.label}</strong>
+                  <small>{item.title}</small>
+                </span>
+              </button>
+            ))}
           </div>
-
-          <div className="sidebar-section">
-            <p className="panel-label">Use Case</p>
-            <div className="choice-grid two-col">
-              {useCaseOptions.map((option) => (
-                <button
-                  key={option}
-                  type="button"
-                  className={`choice-chip ${useCase === option ? 'active' : ''}`}
-                  onClick={() => setUseCase(option)}
-                >
-                  {option}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="sidebar-section">
-            <p className="panel-label">Mode</p>
-            <div className="segmented-row">
-              {quickModes.map((item) => (
-                <button
-                  key={item.name}
-                  type="button"
-                  className={`segment-chip ${mode === item.name ? 'active' : ''}`}
-                  onClick={() => setMode(item.name)}
-                >
-                  {item.name}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="sidebar-section compact-button-stack">
-            <button type="button" className="primary-button full-button" onClick={handleProducerGenerate} disabled={planLoading || !apiKey}>
-              {planLoading ? 'Generating producer plan…' : 'Generate producer plan'}
-            </button>
-            <button type="button" className="ghost-button full-button" onClick={handleMoodboardGenerate} disabled={imageLoading || !apiKey}>
-              {imageLoading ? 'Generating moodboard…' : 'Generate moodboard image'}
-            </button>
-            <button type="button" className="ghost-button full-button" onClick={handleLyricsGenerate} disabled={lyricsLoading || !apiKey}>
-              {lyricsLoading ? 'Generating lyrics…' : 'Generate lyrics draft'}
-            </button>
+          <div className="wizard-summary">
+            <p className="panel-label">Current Project</p>
+            <strong>{title}</strong>
+            <span>{useCase}</span>
+            <span>{genre} · {mood} · {length}</span>
           </div>
         </aside>
 
-        <section className="dashboard-main">
-          <div className="canvas-card dashboard-panel settings-panel">
-            <div className="section-inline-header">
-              <div>
-                <p className="panel-label">Music Direction Dashboard</p>
-                <h3 className="panel-title">Choose the sound without overtyping</h3>
-              </div>
-              <div className="mini-actions">
-                <button type="button" className="ghost-button small-button" onClick={saveProjectLocally}>Save</button>
-                <button type="button" className="ghost-button small-button" onClick={exportCurrentProject}>Export JSON</button>
-                <button type="button" className="ghost-button small-button" onClick={() => importRef.current?.click()}>Import JSON</button>
-              </div>
+        <section className="canvas-card wizard-main-panel">
+          <div className="wizard-panel-header">
+            <div>
+              <p className="panel-label">{stepItems[step].label}</p>
+              <h3 className="wizard-panel-title">{stepItems[step].title}</h3>
             </div>
-
-            <input ref={importRef} type="file" accept="application/json" className="hidden-input" onChange={handleImportProject} />
-
-            <div className="dashboard-control-grid">
-              <DashboardChoiceGroup title="Genre" options={genreOptions} value={genre} onSelect={setGenre} />
-              <DashboardChoiceGroup title="Mood" options={moodOptions} value={mood} onSelect={setMood} />
-              <DashboardChoiceGroup title="Energy" options={energyOptions} value={energy} onSelect={setEnergy} compact />
-              <DashboardChoiceGroup title="Vocals" options={vocalOptions} value={vocalMode} onSelect={setVocalMode} compact />
-              <DashboardChoiceGroup title="Length" options={lengthOptions} value={length} onSelect={setLength} compact />
-              <DashboardChoiceGroup title="Structure" options={structureOptions} value={structure} onSelect={setStructure} />
+            <div className="wizard-nav-actions">
+              <button type="button" className="ghost-button small-button" onClick={previousStep} disabled={step === 0}>Back</button>
+              <button type="button" className="primary-button small-button" onClick={nextStep} disabled={step === 4}>Next</button>
             </div>
+          </div>
 
-            <div className="dashboard-notes-grid">
+          {step === 0 && (
+            <div className="wizard-step-content">
+              <p className="section-copy narrow-copy">
+                Add your Venice API key first. It stays stored in your browser on your machine for this no-auth MVP.
+              </p>
+              <label>
+                <span className="field-label">Venice API Key</span>
+                <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Paste your Venice API key" />
+              </label>
+              <ol className="steps-list">
+                {apiSteps.map((stepText) => <li key={stepText}>{stepText}</li>)}
+              </ol>
+            </div>
+          )}
+
+          {step === 1 && (
+            <div className="wizard-step-content">
+              <label>
+                <span className="field-label">Project Title</span>
+                <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Project title" />
+              </label>
+              <ChoiceGroup title="What are you making?" options={useCaseOptions} value={useCase} onSelect={setUseCase} />
+              <ChoiceGroup title="How guided should the experience be?" options={quickModes} value={mode} onSelect={setMode} compact />
+            </div>
+          )}
+
+          {step === 2 && (
+            <div className="wizard-step-content">
+              <ChoiceGroup title="Genre" options={genreOptions} value={genre} onSelect={setGenre} />
+              <ChoiceGroup title="Mood" options={moodOptions} value={mood} onSelect={setMood} />
+              <ChoiceGroup title="Energy" options={energyOptions} value={energy} onSelect={setEnergy} compact />
+              <ChoiceGroup title="Vocals" options={vocalOptions} value={vocalMode} onSelect={setVocalMode} compact />
+              <ChoiceGroup title="Length" options={lengthOptions} value={length} onSelect={setLength} compact />
+              <ChoiceGroup title="Structure" options={structureOptions} value={structure} onSelect={setStructure} />
+            </div>
+          )}
+
+          {step === 3 && (
+            <div className="wizard-step-content">
               <label>
                 <span className="field-label">Extra Brief Notes</span>
-                <textarea value={briefNotes} onChange={(e) => setBriefNotes(e.target.value)} rows={4} placeholder="Optional detail if you want it." />
+                <textarea value={briefNotes} onChange={(e) => setBriefNotes(e.target.value)} rows={5} placeholder="Optional custom detail." />
               </label>
               <label>
                 <span className="field-label">Lyrics / Vocal Direction</span>
-                <textarea value={lyricNotes} onChange={(e) => setLyricNotes(e.target.value)} rows={4} placeholder="Optional vocal angle, hook idea, language, or emotional framing." />
+                <textarea value={lyricNotes} onChange={(e) => setLyricNotes(e.target.value)} rows={5} placeholder="Optional hook language, delivery notes, tone, or message." />
               </label>
+              <ChoiceGroup title="Quick refinements" options={quickRefinementOptions} value={null} onSelect={applyQuickRefinement} threeCol />
             </div>
+          )}
 
-            <div className="brief-preview-box">
-              <span className="field-label">Auto-built creative brief</span>
-              <div className="output-box">{brief}</div>
+          {step === 4 && (
+            <div className="wizard-step-content">
+              <div className="brief-preview-box">
+                <span className="field-label">Auto-built creative brief</span>
+                <div className="output-box">{brief}</div>
+              </div>
+
+              <div className="wizard-action-grid">
+                <button type="button" className="primary-button full-button" onClick={handleProducerGenerate} disabled={planLoading || !apiKey}>
+                  {planLoading ? 'Generating producer plan…' : 'Generate producer plan'}
+                </button>
+                <button type="button" className="ghost-button full-button" onClick={handleMoodboardGenerate} disabled={imageLoading || !apiKey}>
+                  {imageLoading ? 'Generating moodboard…' : 'Generate moodboard image'}
+                </button>
+                <button type="button" className="ghost-button full-button" onClick={handleLyricsGenerate} disabled={lyricsLoading || !apiKey}>
+                  {lyricsLoading ? 'Generating lyrics…' : 'Generate lyrics draft'}
+                </button>
+                <button type="button" className="ghost-button full-button" onClick={saveProjectLocally}>Save project</button>
+              </div>
+
+              {error ? <p className="error-copy">{error}</p> : null}
+
+              <div className="output-block">
+                <span className="field-label">Optimized Prompt</span>
+                <div className="output-box">{plan.optimizedPrompt || 'Your optimized prompt will appear here once Venice Producer runs.'}</div>
+              </div>
+
+              <div className="output-columns">
+                <OutputList title="Arrangement" items={plan.arrangement} fallback="Section logic and pacing guidance will appear here." />
+                <OutputList title="Instrumentation" items={plan.instrumentation} fallback="Suggested instrumentation will appear here." />
+                <OutputList title="Lyrics Direction" items={plan.lyricsDirection} fallback="Lyrics / vocal suggestions will appear here." />
+                <OutputList title="Producer Notes" items={plan.producerNotes} fallback="Critical producer thinking will appear here." />
+              </div>
+              <OutputList title="Next Refinements" items={plan.nextRefinements} fallback="Quick next-step refinements will appear here." />
+
+              <div className="canvas-card nested-output-card">
+                <p className="panel-label">Lyrics Workspace</p>
+                <div className="output-block">
+                  <span className="field-label">Draft Title</span>
+                  <div className="output-box">{lyricsDraft.title || 'Your Venice-generated lyrics draft title will appear here.'}</div>
+                </div>
+                <div className="output-block">
+                  <span className="field-label">Hook</span>
+                  <div className="output-box">{lyricsDraft.hook || 'Your hook will appear here.'}</div>
+                </div>
+                <div className="output-columns lyrics-columns">
+                  <OutputList title="Sections" items={lyricsDraft.sections} fallback="Verse / chorus / bridge draft content will appear here." />
+                  <OutputList title="Performance Notes" items={lyricsDraft.performanceNotes} fallback="Delivery and performance notes will appear here." />
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
+      </section>
+
+      <section id="saved-projects" className="content-section wizard-bottom-grid">
+        <div className="canvas-card wizard-bottom-card">
+          <div className="section-inline-header">
+            <div>
+              <p className="panel-label">Browser-Local Projects</p>
+              <h4>Save, load, export, and import</h4>
+            </div>
+            <div className="mini-actions">
+              <button type="button" className="ghost-button small-button" onClick={exportCurrentProject}>Export JSON</button>
+              <button type="button" className="ghost-button small-button" onClick={() => importRef.current?.click()}>Import JSON</button>
+              <button type="button" className="ghost-button small-button danger-button" onClick={clearAllProjects}>Clear all</button>
             </div>
           </div>
-
-          <div className="canvas-card dashboard-panel quick-refine-panel">
-            <p className="panel-label">Quick refinements</p>
-            <div className="choice-grid three-col">
-              {quickRefinementOptions.map((option) => (
-                <button key={option} type="button" className="choice-chip" onClick={() => applyQuickRefinement(option)}>
-                  {option}
+          <input ref={importRef} type="file" accept="application/json" className="hidden-input" onChange={handleImportProject} />
+          {projects.length ? (
+            <div className="saved-projects-grid">
+              {projects.map((project) => (
+                <button key={project.id} type="button" className={`saved-project-item ${project.id === activeProjectId ? 'active' : ''}`} onClick={() => loadProject(project)}>
+                  <strong>{project.title}</strong>
+                  <span>{project.mode}</span>
+                  <span>{new Date(project.savedAt).toLocaleString()}</span>
                 </button>
               ))}
             </div>
-          </div>
+          ) : (
+            <p className="muted-copy compact-muted">No projects saved in this browser yet.</p>
+          )}
+        </div>
 
-          <div className="canvas-card dashboard-panel producer-output-card">
-            <p className="panel-label">Producer Output</p>
-            {error ? <p className="error-copy">{error}</p> : null}
-
-            <div className="output-block">
-              <span className="field-label">Optimized Prompt</span>
-              <div className="output-box">{plan.optimizedPrompt || 'Your optimized prompt will appear here once Venice Producer runs.'}</div>
-            </div>
-
-            <div className="output-columns">
-              <OutputList title="Arrangement" items={plan.arrangement} fallback="Section logic and pacing guidance will appear here." />
-              <OutputList title="Instrumentation" items={plan.instrumentation} fallback="Suggested instrumentation will appear here." />
-              <OutputList title="Lyrics Direction" items={plan.lyricsDirection} fallback="Lyrics / vocal suggestions will appear here." />
-              <OutputList title="Producer Notes" items={plan.producerNotes} fallback="Critical producer thinking will appear here." />
-            </div>
-            <OutputList title="Next Refinements" items={plan.nextRefinements} fallback="Quick next-step refinements will appear here." />
-          </div>
-        </section>
-
-        <aside className="dashboard-right-rail">
-          <div className="canvas-card right-rail-card">
-            <p className="panel-label">Lyrics Workspace</p>
-            <div className="output-block">
-              <span className="field-label">Draft Title</span>
-              <div className="output-box">{lyricsDraft.title || 'Your Venice-generated lyrics draft title will appear here.'}</div>
-            </div>
-            <div className="output-block">
-              <span className="field-label">Hook</span>
-              <div className="output-box">{lyricsDraft.hook || 'Your hook will appear here.'}</div>
-            </div>
-            <div className="output-columns lyrics-columns">
-              <OutputList title="Sections" items={lyricsDraft.sections} fallback="Verse / chorus / bridge draft content will appear here." />
-              <OutputList title="Performance Notes" items={lyricsDraft.performanceNotes} fallback="Delivery and performance notes will appear here." />
+        <div className="canvas-card wizard-bottom-card">
+          <div className="section-inline-header">
+            <div>
+              <p className="panel-label">Version Snapshots</p>
+              <h4>Capture milestones while you iterate</h4>
             </div>
           </div>
-
-          <div className="canvas-card right-rail-card">
-            <div className="section-inline-header">
-              <div>
-                <p className="panel-label">Project Versions</p>
-                <h4>Snapshots</h4>
-              </div>
-            </div>
-            <div className="snapshot-form-row">
-              <input
-                value={snapshotLabel}
-                onChange={(e) => setSnapshotLabel(e.target.value)}
-                placeholder="Snapshot label"
-              />
-              <button type="button" className="ghost-button small-button" onClick={createSnapshot}>Create</button>
-            </div>
-
-            {activeProject?.snapshots?.length ? (
-              <div className="snapshot-list">
-                {activeProject.snapshots.map((snapshot) => (
-                  <div key={snapshot.id} className="snapshot-item">
-                    <div>
-                      <strong>{snapshot.label}</strong>
-                      <span>{new Date(snapshot.createdAt).toLocaleString()}</span>
-                    </div>
-                    <button type="button" className="ghost-button small-button" onClick={() => restoreSnapshot(snapshot)}>Restore</button>
+          <div className="snapshot-form-row">
+            <input value={snapshotLabel} onChange={(e) => setSnapshotLabel(e.target.value)} placeholder="Snapshot label" />
+            <button type="button" className="ghost-button small-button" onClick={createSnapshot}>Create</button>
+          </div>
+          {activeProject?.snapshots?.length ? (
+            <div className="snapshot-list">
+              {activeProject.snapshots.map((snapshot) => (
+                <div key={snapshot.id} className="snapshot-item">
+                  <div>
+                    <strong>{snapshot.label}</strong>
+                    <span>{new Date(snapshot.createdAt).toLocaleString()}</span>
                   </div>
-                ))}
-              </div>
-            ) : (
-              <p className="muted-copy compact-muted">No snapshots yet for the active project.</p>
-            )}
-          </div>
-
-          <div className="canvas-card right-rail-card">
-            <div className="section-inline-header">
-              <div>
-                <p className="panel-label">Browser-Local Projects</p>
-                <h4>Recent</h4>
-              </div>
-              <button type="button" className="ghost-button small-button danger-button" onClick={clearAllProjects}>Clear</button>
+                  <button type="button" className="ghost-button small-button" onClick={() => restoreSnapshot(snapshot)}>Restore</button>
+                </div>
+              ))}
             </div>
-            {projects.length ? (
-              <div className="saved-projects-grid compact-project-list">
-                {projects.map((project) => (
-                  <button
-                    type="button"
-                    key={project.id}
-                    className={`saved-project-item ${project.id === activeProjectId ? 'active' : ''}`}
-                    onClick={() => loadProject(project)}
-                  >
-                    <strong>{project.title}</strong>
-                    <span>{project.mode}</span>
-                    <span>{new Date(project.savedAt).toLocaleString()}</span>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <p className="muted-copy compact-muted">No projects saved in this browser yet.</p>
-            )}
-          </div>
-        </aside>
+          ) : (
+            <p className="muted-copy compact-muted">No snapshots yet for the active project.</p>
+          )}
+        </div>
       </section>
 
       <section id="guidance" className="content-section guidance-section">
@@ -725,7 +634,6 @@ export default function HomePage() {
             Venice should not just fill fields. It should help users think in arrangement, contrast, pacing, hook design, emotional shape, and lyrical focus.
           </p>
         </div>
-
         <div className="guidance-list">
           {producerSuggestions.map((suggestion) => (
             <article key={suggestion} className="guidance-item">
@@ -736,51 +644,20 @@ export default function HomePage() {
         </div>
       </section>
 
-      <section className="content-section workspace-summary-section">
-        <div className="workspace-grid summary-grid">
-          {workspaceCards.map((card) => (
-            <article key={card.title} className="workspace-card">
-              <h4>{card.title}</h4>
-              <p>{card.text}</p>
-            </article>
-          ))}
-        </div>
-      </section>
-
       <section id="api-key" className="content-section api-section">
         <div className="api-grid">
           <div className="canvas-card api-card">
-            <p className="eyebrow">Bring your own API key</p>
-            <h3>Add your Venice key and use the app with your own account.</h3>
+            <p className="eyebrow">Why this feels lighter</p>
+            <h3>Less typing. More choosing. More flow.</h3>
             <p className="section-copy">
-              Since music generation is not yet active in Venice for this setup, the current MVP uses Venice for producer intelligence, lyrics support, prompt optimization, and image generation. Later, we can connect music generation when the Venice + 11Labs pathway is ready.
+              The studio now walks the user through one stage at a time. They click, add a custom note only when needed, move forward, go backward, and only then reach the generation stage.
             </p>
-
-            <label>
-              <span className="field-label">Venice API Key</span>
-              <input
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="Paste your Venice API key"
-              />
-            </label>
-            <p className="helper-copy">This MVP stores your key in your browser on your local machine so you do not need auth for usage.</p>
           </div>
-
           <div className="canvas-card api-card steps-card">
             <p className="panel-label">How to get your key</p>
             <ol className="steps-list">
-              {apiSteps.map((step) => (
-                <li key={step}>{step}</li>
-              ))}
+              {apiSteps.map((stepText) => <li key={stepText}>{stepText}</li>)}
             </ol>
-            <div className="preview-panel note-panel">
-              <p className="panel-label">Deployment Note</p>
-              <p>
-                Railway deployment is configured for the app shell. Users can bring their own Venice API key in the browser-local MVP without needing user accounts or server-side auth.
-              </p>
-            </div>
           </div>
         </div>
       </section>
@@ -788,23 +665,26 @@ export default function HomePage() {
   );
 }
 
-function DashboardChoiceGroup<T extends string>({
+function ChoiceGroup<T extends string>({
   title,
   options,
   value,
   onSelect,
-  compact = false
+  compact = false,
+  threeCol = false
 }: {
   title: string;
   options: readonly T[];
-  value: T;
+  value: T | null;
   onSelect: (value: T) => void;
   compact?: boolean;
+  threeCol?: boolean;
 }) {
+  const gridClass = threeCol ? 'three-col' : compact ? 'compact-grid' : 'two-col';
   return (
     <div className="choice-group-card">
       <span className="field-label">{title}</span>
-      <div className={`choice-grid ${compact ? 'compact-grid' : 'two-col'}`}>
+      <div className={`choice-grid ${gridClass}`}>
         {options.map((option) => (
           <button
             key={option}
@@ -826,9 +706,7 @@ function OutputList({ title, items, fallback }: { title: string; items: string[]
       <span className="field-label">{title}</span>
       {items.length ? (
         <ul>
-          {items.map((item) => (
-            <li key={item}>{item}</li>
-          ))}
+          {items.map((item) => <li key={item}>{item}</li>)}
         </ul>
       ) : (
         <p className="muted-copy compact-muted">{fallback}</p>
