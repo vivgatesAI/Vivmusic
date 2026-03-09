@@ -9,6 +9,11 @@ type MusicModel = {
   supportsLyrics: boolean;
   lyricsRequired: boolean;
   supportsForceInstrumental: boolean;
+  supportsSpeed: boolean;
+  minSpeed: number | null;
+  maxSpeed: number | null;
+  voices: string[];
+  defaultVoice: string | null;
   durationOptions: number[] | null;
   minDuration: number | null;
   maxDuration: number | null;
@@ -19,6 +24,7 @@ type MusicModel = {
   lyricsCharacterLimit: number | null;
   minPromptLength: number;
   pricing: Record<string, unknown>;
+  privacy: string;
 };
 
 type GenerationStatus = 'idle' | 'optimizing' | 'queued' | 'processing' | 'completed' | 'failed';
@@ -89,9 +95,11 @@ export default function HomePage() {
   const [genre, setGenre] = useState<string | null>(null);
   const [mood, setMood] = useState<string | null>(null);
   const [duration, setDuration] = useState(60);
-  const [instrumental, setInstrumental] = useState(true);
-  const [showLyrics, setShowLyrics] = useState(false);
+  const [instrumental, setInstrumental] = useState(false);
   const [lyrics, setLyrics] = useState('');
+  const [showLyrics, setShowLyrics] = useState(false);
+  const [voice, setVoice] = useState('');
+  const [speed, setSpeed] = useState(1);
 
   const [status, setStatus] = useState<GenerationStatus>('idle');
   const [statusText, setStatusText] = useState('');
@@ -109,9 +117,6 @@ export default function HomePage() {
 
   const selectedModel = models.find(m => m.id === selectedModelId) || null;
   const durationOpts = selectedModel ? getDurationOptions(selectedModel) : [30, 60, 90, 120];
-  const canHaveLyrics = selectedModel?.supportsLyrics || false;
-  const lyricsRequired = selectedModel?.lyricsRequired || false;
-  const canForceInstrumental = selectedModel?.supportsForceInstrumental || false;
   const priceEstimate = selectedModel ? formatPrice(selectedModel, duration) : '';
 
   useEffect(() => {
@@ -132,7 +137,7 @@ export default function HomePage() {
     const forStorage = tracks.slice(0, 5).map(t => ({ ...t, audioBlobUrl: '' }));
     try {
       localStorage.setItem(HISTORY_KEY, JSON.stringify(forStorage));
-    } catch { /* storage full — ignore */ }
+    } catch { /* storage full */ }
   }, [tracks]);
 
   useEffect(() => {
@@ -159,20 +164,28 @@ export default function HomePage() {
   }, [apiKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (selectedModel) {
-      const opts = getDurationOptions(selectedModel);
-      if (!opts.includes(duration)) setDuration(selectedModel.defaultDuration);
-      if (!selectedModel.supportsLyrics) {
-        setShowLyrics(false);
-        setLyrics('');
-      }
-      if (selectedModel.lyricsRequired) {
-        setShowLyrics(true);
-        setInstrumental(false);
-      }
-      if (!selectedModel.supportsForceInstrumental) {
-        setInstrumental(false);
-      }
+    if (!selectedModel) return;
+    const opts = getDurationOptions(selectedModel);
+    if (!opts.includes(duration)) setDuration(selectedModel.defaultDuration);
+
+    if (!selectedModel.supportsLyrics) {
+      setShowLyrics(false);
+      setLyrics('');
+    }
+    if (selectedModel.lyricsRequired) {
+      setShowLyrics(true);
+      setInstrumental(false);
+    }
+    if (!selectedModel.supportsForceInstrumental) {
+      setInstrumental(false);
+    }
+    if (selectedModel.defaultVoice) {
+      setVoice(selectedModel.defaultVoice);
+    } else {
+      setVoice('');
+    }
+    if (!selectedModel.supportsSpeed) {
+      setSpeed(1);
     }
   }, [selectedModelId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -185,8 +198,8 @@ export default function HomePage() {
 
   async function generate() {
     if (!apiKey || !description.trim() || !selectedModel) return;
-    if (lyricsRequired && !lyrics.trim()) {
-      setError(`${selectedModel.name} requires lyrics. Please add them below.`);
+    if (selectedModel.lyricsRequired && !lyrics.trim()) {
+      setError(`${selectedModel.name} requires lyrics. Please add them.`);
       return;
     }
 
@@ -206,8 +219,8 @@ export default function HomePage() {
           genre,
           mood,
           duration,
-          instrumental: canForceInstrumental && instrumental,
-          lyrics: canHaveLyrics && lyrics ? lyrics : undefined,
+          instrumental: selectedModel.supportsForceInstrumental && instrumental,
+          lyrics: selectedModel.supportsLyrics && lyrics ? lyrics : undefined,
           modelName: selectedModel.name,
           promptLimit: selectedModel.promptCharacterLimit,
         }),
@@ -229,8 +242,10 @@ export default function HomePage() {
           model: selectedModel.id,
           prompt: optimizedPrompt,
           durationSeconds: duration,
-          forceInstrumental: canForceInstrumental && instrumental,
-          lyricsPrompt: canHaveLyrics && lyrics ? lyrics : undefined,
+          forceInstrumental: selectedModel.supportsForceInstrumental && instrumental,
+          lyricsPrompt: selectedModel.supportsLyrics && lyrics ? lyrics : undefined,
+          voice: selectedModel.voices.length > 0 ? voice : undefined,
+          speed: selectedModel.supportsSpeed && speed !== 1 ? speed : undefined,
         }),
       });
       const queueData = await queueRes.json();
@@ -359,11 +374,15 @@ export default function HomePage() {
   }
 
   const isGenerating = status === 'optimizing' || status === 'queued' || status === 'processing';
-  const canGenerate = apiKey && description.trim().length >= (selectedModel?.minPromptLength || 10) && selectedModel && !isGenerating;
+  const canGenerate =
+    apiKey &&
+    description.trim().length >= (selectedModel?.minPromptLength || 10) &&
+    selectedModel &&
+    !isGenerating &&
+    (!selectedModel.lyricsRequired || lyrics.trim().length > 0);
 
   return (
     <main className="app-shell">
-      {/* Decorative elements */}
       <div className="deco-ring deco-ring-1" />
       <div className="deco-ring deco-ring-2" />
       <div className="scanlines" />
@@ -381,7 +400,7 @@ export default function HomePage() {
       {/* API Key */}
       <section className="card key-card">
         <button type="button" className="key-toggle" onClick={() => setShowKey(!showKey)}>
-          <span className="key-dot" />
+          <span className={`key-dot ${apiKey ? 'connected' : ''}`} />
           {apiKey ? 'API Key Connected' : 'Connect Venice API Key'}
           <span className={`chevron ${showKey ? 'open' : ''}`} />
         </button>
@@ -396,9 +415,7 @@ export default function HomePage() {
             />
             <p className="hint">
               Get a free key at{' '}
-              <a href="https://venice.ai/settings/api" target="_blank" rel="noopener noreferrer">
-                venice.ai/settings/api
-              </a>
+              <a href="https://venice.ai/settings/api" target="_blank" rel="noopener noreferrer">venice.ai/settings/api</a>
             </p>
           </form>
         )}
@@ -419,9 +436,13 @@ export default function HomePage() {
                 <strong>{m.name}</strong>
                 <span className="model-desc">{m.description}</span>
                 <div className="model-tags">
-                  {m.supportsLyrics && <span className="mtag lyrics-tag">Lyrics</span>}
+                  {m.supportsLyrics && !m.lyricsRequired && <span className="mtag lyrics-tag">Lyrics OK</span>}
+                  {m.lyricsRequired && <span className="mtag lyrics-req-tag">Lyrics Req</span>}
                   {m.supportsForceInstrumental && <span className="mtag inst-tag">Instrumental</span>}
+                  {m.voices.length > 0 && <span className="mtag voice-tag">Voices</span>}
+                  {m.supportsSpeed && <span className="mtag speed-tag">Speed</span>}
                   <span className="mtag format-tag">{m.defaultFormat.toUpperCase()}</span>
+                  <span className="mtag privacy-tag">{m.privacy}</span>
                 </div>
               </button>
             ))}
@@ -430,139 +451,182 @@ export default function HomePage() {
         </section>
       )}
 
-      {/* Create Card */}
-      <section className="card create-card">
-        <div className="section-label">Describe Your Sound</div>
-        <textarea
-          value={description}
-          onChange={e => setDescription(e.target.value)}
-          placeholder='e.g. "Upbeat electronic track for a product launch, building energy with a massive drop"'
-          rows={3}
-          maxLength={selectedModel?.promptCharacterLimit || 500}
-        />
-        {selectedModel && (
-          <div className="char-count">
-            {description.length}/{selectedModel.promptCharacterLimit}
-          </div>
-        )}
+      {/* Model Parameters */}
+      {selectedModel && (
+        <section className="card params-card">
+          <div className="section-label">{selectedModel.name} Settings</div>
 
-        <div className="chips-section">
-          <span className="chips-label">Genre</span>
-          <div className="chips">
-            {genres.map(g => (
-              <button
-                key={g}
-                type="button"
-                className={`chip ${genre === g ? 'active' : ''}`}
-                onClick={() => setGenre(genre === g ? null : g)}
-              >
-                {g}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="chips-section">
-          <span className="chips-label">Mood</span>
-          <div className="chips">
-            {moods.map(m => (
-              <button
-                key={m}
-                type="button"
-                className={`chip ${mood === m ? 'active' : ''}`}
-                onClick={() => setMood(mood === m ? null : m)}
-              >
-                {m}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="chips-section">
-          <span className="chips-label">Duration</span>
-          <div className="chips">
-            {durationOpts.map(d => (
-              <button
-                key={d}
-                type="button"
-                className={`chip ${duration === d ? 'active' : ''}`}
-                onClick={() => setDuration(d)}
-              >
-                {formatDuration(d)}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Instrumental toggle — only if model supports it */}
-        {canForceInstrumental && (
-          <div className="toggle-row">
-            <button
-              type="button"
-              className={`toggle-btn ${instrumental ? 'active' : ''}`}
-              onClick={() => { setInstrumental(true); setShowLyrics(false); }}
-            >
-              Instrumental
-            </button>
-            <button
-              type="button"
-              className={`toggle-btn ${!instrumental ? 'active' : ''}`}
-              onClick={() => setInstrumental(false)}
-            >
-              With Vocals
-            </button>
-          </div>
-        )}
-
-        {/* Lyrics — if model supports or requires them */}
-        {canHaveLyrics && (
-          <div className="lyrics-section">
-            {!lyricsRequired && (
-              <button
-                type="button"
-                className="lyrics-toggle"
-                onClick={() => setShowLyrics(!showLyrics)}
-              >
-                {showLyrics ? 'Hide lyrics' : '+ Add custom lyrics'}
-              </button>
-            )}
-            {(showLyrics || lyricsRequired) && (
-              <>
-                <textarea
-                  value={lyrics}
-                  onChange={e => setLyrics(e.target.value)}
-                  placeholder={lyricsRequired
-                    ? 'Lyrics are required for this model. Add verse/chorus structure...'
-                    : 'Verse 1: Walking through the city lights...'}
-                  rows={5}
-                  maxLength={selectedModel?.lyricsCharacterLimit || 4096}
-                />
-                {lyricsRequired && !lyrics.trim() && (
-                  <p className="lyrics-required-hint">This model requires lyrics to generate.</p>
-                )}
-              </>
+          {/* Prompt */}
+          <div className="param-group">
+            <div className="param-header">
+              <span className="param-label">Music Description</span>
+              <span className="param-counter">{description.length}/{selectedModel.promptCharacterLimit}</span>
+            </div>
+            <textarea
+              value={description}
+              onChange={e => setDescription(e.target.value)}
+              placeholder='e.g. "Upbeat electronic track for a product launch, building energy with a massive drop"'
+              rows={3}
+              maxLength={selectedModel.promptCharacterLimit}
+            />
+            {description.length < selectedModel.minPromptLength && description.length > 0 && (
+              <p className="param-hint warn">Minimum {selectedModel.minPromptLength} characters required</p>
             )}
           </div>
-        )}
 
-        <div className="action-row">
-          <button
-            type="button"
-            className="btn-generate"
-            onClick={generate}
-            disabled={!canGenerate}
-          >
-            {isGenerating ? statusText : 'Generate Music'}
-          </button>
-          {priceEstimate && (
-            <div className="price-badge">
-              {priceEstimate}
+          {/* Genre + Mood */}
+          <div className="chips-section">
+            <span className="chips-label">Genre</span>
+            <div className="chips">
+              {genres.map(g => (
+                <button key={g} type="button" className={`chip ${genre === g ? 'active' : ''}`} onClick={() => setGenre(genre === g ? null : g)}>{g}</button>
+              ))}
+            </div>
+          </div>
+
+          <div className="chips-section">
+            <span className="chips-label">Mood</span>
+            <div className="chips">
+              {moods.map(m => (
+                <button key={m} type="button" className={`chip ${mood === m ? 'active' : ''}`} onClick={() => setMood(mood === m ? null : m)}>{m}</button>
+              ))}
+            </div>
+          </div>
+
+          {/* Duration */}
+          <div className="chips-section">
+            <span className="chips-label">Duration</span>
+            <div className="chips">
+              {durationOpts.map(d => (
+                <button key={d} type="button" className={`chip ${duration === d ? 'active' : ''}`} onClick={() => setDuration(d)}>{formatDuration(d)}</button>
+              ))}
+            </div>
+          </div>
+
+          {/* Instrumental toggle */}
+          {selectedModel.supportsForceInstrumental && (
+            <div className="param-group">
+              <span className="param-label">Vocal Mode</span>
+              <div className="toggle-row">
+                <button type="button" className={`toggle-btn ${instrumental ? 'active' : ''}`} onClick={() => { setInstrumental(true); setShowLyrics(false); setLyrics(''); }}>
+                  Instrumental Only
+                </button>
+                <button type="button" className={`toggle-btn ${!instrumental ? 'active' : ''}`} onClick={() => setInstrumental(false)}>
+                  With Vocals
+                </button>
+              </div>
             </div>
           )}
-        </div>
 
-        {error && <p className="error-msg">{error}</p>}
-      </section>
+          {/* Lyrics */}
+          {selectedModel.supportsLyrics && (
+            <div className="param-group">
+              <div className="param-header">
+                <span className="param-label">
+                  {selectedModel.lyricsRequired ? 'Lyrics (Required)' : 'Lyrics (Optional)'}
+                </span>
+                {(showLyrics || selectedModel.lyricsRequired) && selectedModel.lyricsCharacterLimit && (
+                  <span className="param-counter">{lyrics.length}/{selectedModel.lyricsCharacterLimit}</span>
+                )}
+              </div>
+
+              {!selectedModel.lyricsRequired && (
+                <button type="button" className="lyrics-toggle" onClick={() => setShowLyrics(!showLyrics)}>
+                  {showLyrics ? 'Remove lyrics' : '+ Add custom lyrics'}
+                </button>
+              )}
+
+              {(showLyrics || selectedModel.lyricsRequired) && (
+                <textarea
+                  className="lyrics-textarea"
+                  value={lyrics}
+                  onChange={e => setLyrics(e.target.value)}
+                  placeholder={selectedModel.lyricsRequired
+                    ? '[Verse 1]\nYour lyrics here...\n\n[Chorus]\nHook goes here...'
+                    : 'Verse 1: Walking through the city lights...'}
+                  rows={6}
+                  maxLength={selectedModel.lyricsCharacterLimit || 4096}
+                />
+              )}
+              {selectedModel.lyricsRequired && !lyrics.trim() && (
+                <p className="param-hint warn">This model requires lyrics to generate music.</p>
+              )}
+            </div>
+          )}
+
+          {/* Voice selector */}
+          {selectedModel.voices.length > 0 && (
+            <div className="param-group">
+              <span className="param-label">Voice</span>
+              <select value={voice} onChange={e => setVoice(e.target.value)} className="param-select">
+                {selectedModel.voices.map(v => (
+                  <option key={v} value={v}>
+                    {v}{v === selectedModel.defaultVoice ? ' (default)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Speed slider */}
+          {selectedModel.supportsSpeed && (
+            <div className="param-group">
+              <div className="param-header">
+                <span className="param-label">Speed</span>
+                <span className="param-value">{speed.toFixed(1)}x</span>
+              </div>
+              <input
+                type="range"
+                min={selectedModel.minSpeed ?? 0.25}
+                max={selectedModel.maxSpeed ?? 4}
+                step={0.05}
+                value={speed}
+                onChange={e => setSpeed(parseFloat(e.target.value))}
+                className="param-slider"
+              />
+              <div className="slider-labels">
+                <span>{selectedModel.minSpeed ?? 0.25}x</span>
+                <span>Normal</span>
+                <span>{selectedModel.maxSpeed ?? 4}x</span>
+              </div>
+            </div>
+          )}
+
+          {/* Output info + price */}
+          <div className="param-info-row">
+            <div className="param-info-item">
+              <span className="param-info-label">Format</span>
+              <span className="param-info-value">{selectedModel.supportedFormats.map(f => f.toUpperCase()).join(', ')}</span>
+            </div>
+            <div className="param-info-item">
+              <span className="param-info-label">Privacy</span>
+              <span className="param-info-value">{selectedModel.privacy}</span>
+            </div>
+            {priceEstimate && (
+              <div className="param-info-item">
+                <span className="param-info-label">Est. Cost</span>
+                <span className="param-info-value price">{priceEstimate}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Generate */}
+          <div className="action-row">
+            <button type="button" className="btn-generate" onClick={generate} disabled={!canGenerate}>
+              {isGenerating ? statusText : `Generate with ${selectedModel.name}`}
+            </button>
+          </div>
+
+          {error && <p className="error-msg">{error}</p>}
+        </section>
+      )}
+
+      {/* No models state */}
+      {!modelsLoading && models.length === 0 && apiKey && (
+        <section className="card">
+          <p className="hint">No music models available. Check your API key or try again.</p>
+        </section>
+      )}
 
       {/* Progress */}
       {isGenerating && (
@@ -581,13 +645,9 @@ export default function HomePage() {
             <div>
               <h3>Your Track is Ready</h3>
               <p className="player-prompt">{description}</p>
-              {selectedModel && <span className="player-model">{selectedModel.name}</span>}
+              {selectedModel && <span className="player-model">{selectedModel.name} &middot; {selectedModel.defaultFormat.toUpperCase()}</span>}
             </div>
-            <button
-              type="button"
-              className="btn-download"
-              onClick={() => downloadAudio(currentAudioUrl, description.slice(0, 30).replace(/\s+/g, '-'))}
-            >
+            <button type="button" className="btn-download" onClick={() => downloadAudio(currentAudioUrl, description.slice(0, 30).replace(/\s+/g, '-'))}>
               Download
             </button>
           </div>
@@ -611,28 +671,15 @@ export default function HomePage() {
               const hasAudio = !!track.audioBlobUrl;
               return (
                 <div key={track.id} className="history-item">
-                  <button
-                    type="button"
-                    className={`history-play ${!hasAudio ? 'disabled' : ''}`}
-                    onClick={() => hasAudio && playHistoryTrack(track)}
-                    disabled={!hasAudio}
-                  >
+                  <button type="button" className={`history-play ${!hasAudio ? 'disabled' : ''}`} onClick={() => hasAudio && playHistoryTrack(track)} disabled={!hasAudio}>
                     {playingTrackId === track.id ? '||' : '\u25B6'}
                   </button>
                   <div className="history-info">
                     <span className="history-prompt">{track.prompt}</span>
-                    <span className="history-meta">
-                      {track.modelName} &middot; {formatDuration(track.duration)} &middot; {new Date(track.createdAt).toLocaleDateString()}
-                    </span>
+                    <span className="history-meta">{track.modelName} &middot; {formatDuration(track.duration)} &middot; {new Date(track.createdAt).toLocaleDateString()}</span>
                   </div>
                   {hasAudio && (
-                    <button
-                      type="button"
-                      className="history-download"
-                      onClick={() => downloadAudio(track.audioBlobUrl, track.prompt.slice(0, 20).replace(/\s+/g, '-'))}
-                    >
-                      Save
-                    </button>
+                    <button type="button" className="history-download" onClick={() => downloadAudio(track.audioBlobUrl, track.prompt.slice(0, 20).replace(/\s+/g, '-'))}>Save</button>
                   )}
                 </div>
               );

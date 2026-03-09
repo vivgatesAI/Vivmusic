@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { apiKey, model, prompt, lyricsPrompt, durationSeconds, forceInstrumental } = body ?? {};
+    const { apiKey, model, prompt, lyricsPrompt, durationSeconds, forceInstrumental, voice, speed } = body ?? {};
 
     if (!apiKey) {
       return NextResponse.json({ error: 'Missing Venice API key.' }, { status: 400 });
@@ -20,6 +20,8 @@ export async function POST(request: Request) {
     if (durationSeconds) payload.duration_seconds = durationSeconds;
     if (forceInstrumental) payload.force_instrumental = true;
     if (lyricsPrompt) payload.lyrics_prompt = lyricsPrompt;
+    if (voice) payload.voice = voice;
+    if (speed != null && speed !== 1) payload.speed = speed;
 
     const response = await fetch('https://api.venice.ai/api/v1/audio/queue', {
       method: 'POST',

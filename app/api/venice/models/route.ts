@@ -11,9 +11,7 @@ export async function POST(request: Request) {
 
     const response = await fetch('https://api.venice.ai/api/v1/models?type=music', {
       method: 'GET',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-      },
+      headers: { Authorization: `Bearer ${apiKey}` },
     });
 
     if (!response.ok) {
@@ -34,9 +32,14 @@ export async function POST(request: Request) {
           supportsLyrics: spec.supports_lyrics || false,
           lyricsRequired: spec.lyrics_required || false,
           supportsForceInstrumental: spec.supports_force_instrumental || false,
+          supportsSpeed: spec.supports_speed || false,
+          minSpeed: spec.min_speed ?? null,
+          maxSpeed: spec.max_speed ?? null,
+          voices: Array.isArray(spec.voices) ? spec.voices : [],
+          defaultVoice: spec.default_voice || null,
           durationOptions: spec.duration_options || null,
-          minDuration: spec.min_duration || null,
-          maxDuration: spec.max_duration || null,
+          minDuration: spec.min_duration ?? null,
+          maxDuration: spec.max_duration ?? null,
           defaultDuration: spec.default_duration || 60,
           supportedFormats: spec.supported_formats || ['mp3'],
           defaultFormat: spec.default_format || 'mp3',
@@ -44,6 +47,7 @@ export async function POST(request: Request) {
           lyricsCharacterLimit: spec.lyrics_character_limit || null,
           minPromptLength: spec.min_prompt_length || 10,
           pricing: spec.pricing || {},
+          privacy: spec.privacy || 'unknown',
         };
       });
 
