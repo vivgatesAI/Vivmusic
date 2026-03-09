@@ -27,20 +27,24 @@ type MusicModel = {
   privacy: string;
 };
 
-type GenerationStatus = 'idle' | 'optimizing' | 'queued' | 'processing' | 'completed' | 'failed';
+type GenerationStatus = 'idle' | 'optimizing' | 'queued' | 'processing' | 'downloading' | 'completed' | 'failed';
 
 type Track = {
   id: string;
   prompt: string;
   optimizedPrompt: string;
+  modelId: string;
   modelName: string;
+  format: string;
   audioBlobUrl: string;
   createdAt: string;
   duration: number;
+  genre: string | null;
+  mood: string | null;
 };
 
 const API_KEY_STORAGE = 'vivmusic.apiKey';
-const HISTORY_KEY = 'vivmusic.tracks.v2';
+const HISTORY_KEY = 'vivmusic.tracks.v3';
 
 const genres = ['Cinematic', 'Lo-fi', 'Electronic', 'Ambient', 'Pop', 'Hip-Hop', 'Rock', 'Jazz'] as const;
 const moods = ['Uplifting', 'Chill', 'Dark', 'Energetic', 'Emotional', 'Futuristic', 'Dreamy', 'Intense'] as const;
@@ -83,6 +87,10 @@ function formatPrice(model: MusicModel, duration: number): string {
   return '';
 }
 
+function sleep(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 export default function HomePage() {
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
@@ -106,12 +114,11 @@ export default function HomePage() {
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState('');
   const [currentAudioUrl, setCurrentAudioUrl] = useState<string | null>(null);
-  const [currentPrompt, setCurrentPrompt] = useState('');
+  const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [tracks, setTracks] = useState<Track[]>([]);
   const [playingTrackId, setPlayingTrackId] = useState<string | null>(null);
 
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const pollErrorCount = useRef(0);
+  const cancelledRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const historyAudioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -167,33 +174,19 @@ export default function HomePage() {
     if (!selectedModel) return;
     const opts = getDurationOptions(selectedModel);
     if (!opts.includes(duration)) setDuration(selectedModel.defaultDuration);
-
-    if (!selectedModel.supportsLyrics) {
-      setShowLyrics(false);
-      setLyrics('');
-    }
-    if (selectedModel.lyricsRequired) {
-      setShowLyrics(true);
-      setInstrumental(false);
-    }
-    if (!selectedModel.supportsForceInstrumental) {
-      setInstrumental(false);
-    }
-    if (selectedModel.defaultVoice) {
-      setVoice(selectedModel.defaultVoice);
-    } else {
-      setVoice('');
-    }
-    if (!selectedModel.supportsSpeed) {
-      setSpeed(1);
-    }
+    if (!selectedModel.supportsLyrics) { setShowLyrics(false); setLyrics(''); }
+    if (selectedModel.lyricsRequired) { setShowLyrics(true); setInstrumental(false); }
+    if (!selectedModel.supportsForceInstrumental) { setInstrumental(false); }
+    setVoice(selectedModel.defaultVoice || '');
+    if (!selectedModel.supportsSpeed) setSpeed(1);
   }, [selectedModelId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const stopPolling = useCallback(() => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
+  const cancelGeneration = useCallback(() => {
+    cancelledRef.current = true;
+    setStatus('idle');
+    setStatusText('');
+    setProgress(0);
+    setError('');
   }, []);
 
   async function generate() {
@@ -203,13 +196,16 @@ export default function HomePage() {
       return;
     }
 
+    cancelledRef.current = false;
     setError('');
     setStatus('optimizing');
     setStatusText('AI is crafting the perfect prompt...');
     setProgress(5);
     setCurrentAudioUrl(null);
+    setCurrentTrack(null);
 
     try {
+      // Step 1: Optimize prompt
       const optRes = await fetch('/api/venice/producer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -227,13 +223,14 @@ export default function HomePage() {
       });
       const optData = await optRes.json();
       if (!optRes.ok) throw new Error(optData?.error || 'Prompt optimization failed');
+      if (cancelledRef.current) return;
 
       const optimizedPrompt = optData.optimizedPrompt;
-      setCurrentPrompt(optimizedPrompt);
       setProgress(15);
       setStatus('queued');
       setStatusText('Submitting to Venice...');
 
+      // Step 2: Queue generation
       const queueRes = await fetch('/api/venice/audio/queue', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -250,99 +247,129 @@ export default function HomePage() {
       });
       const queueData = await queueRes.json();
       if (!queueRes.ok) throw new Error(queueData?.error || 'Queue failed');
+      if (cancelledRef.current) return;
 
       const queueId = queueData.queueId;
       setProgress(25);
       setStatus('processing');
       setStatusText('Generating your music...');
-      pollErrorCount.current = 0;
 
-      pollRef.current = setInterval(async () => {
+      // Step 3: Poll for completion (like the video app pattern)
+      await sleep(3000);
+
+      const POLL_INTERVAL = 5000;
+      const MAX_ATTEMPTS = 120;
+      let consecutiveErrors = 0;
+
+      for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+        if (cancelledRef.current) return;
+
         try {
           const statusRes = await fetch('/api/venice/audio/status', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ apiKey, model: selectedModel.id, queueId }),
           });
-          const statusData = await statusRes.json();
 
-          if (statusData.error && statusData.status !== 'COMPLETED' && statusData.status !== 'FAILED') {
-            pollErrorCount.current++;
-            if (pollErrorCount.current >= 8) {
-              stopPolling();
-              setStatus('failed');
-              setStatusText('Lost connection to Venice. Please try again.');
-              setError(statusData.error || 'Too many polling errors.');
-              setProgress(0);
+          if (!statusRes.ok) {
+            consecutiveErrors++;
+            if (statusRes.status === 404 && attempt < 5) {
+              await sleep(5000);
+              continue;
             }
-            return;
+            if (consecutiveErrors >= 5) {
+              throw new Error(`Venice returned ${statusRes.status} (${consecutiveErrors} consecutive errors)`);
+            }
+            await sleep(POLL_INTERVAL);
+            continue;
           }
 
-          pollErrorCount.current = 0;
+          const statusData = await statusRes.json();
+          consecutiveErrors = 0;
 
           if (statusData.status === 'COMPLETED') {
-            stopPolling();
-            setProgress(90);
+            setProgress(85);
+            setStatus('downloading');
             setStatusText('Downloading your track...');
 
-            const audioRes = await fetch('/api/venice/audio/status', {
+            // Step 4: Download audio via dedicated route
+            const audioRes = await fetch('/api/venice/audio/download', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ apiKey, model: selectedModel.id, queueId, downloadAudio: true }),
+              body: JSON.stringify({ apiKey, model: selectedModel.id, queueId }),
             });
 
             if (!audioRes.ok) {
-              setStatus('failed');
-              setStatusText('Audio download failed.');
-              setError('Could not download the generated audio.');
-              setProgress(0);
-              return;
+              const errData = await audioRes.json().catch(() => ({}));
+              throw new Error((errData as Record<string, string>).error || 'Audio download failed');
+            }
+
+            const ct = audioRes.headers.get('Content-Type') || '';
+            if (!ct.includes('audio/') && !ct.includes('application/octet-stream')) {
+              throw new Error('Unexpected response type from download');
             }
 
             const audioBlob = await audioRes.blob();
             const audioBlobUrl = URL.createObjectURL(audioBlob);
+            if (cancelledRef.current) { URL.revokeObjectURL(audioBlobUrl); return; }
+
             setCurrentAudioUrl(audioBlobUrl);
-            setStatus('completed');
-            setStatusText('Your music is ready!');
-            setProgress(100);
 
             const track: Track = {
               id: `track-${Date.now()}`,
               prompt: description.trim(),
               optimizedPrompt,
+              modelId: selectedModel.id,
               modelName: selectedModel.name,
+              format: selectedModel.defaultFormat,
               audioBlobUrl,
               createdAt: new Date().toISOString(),
               duration,
+              genre,
+              mood,
             };
-            setTracks(prev => [track, ...prev].slice(0, 5));
-          } else if (statusData.status === 'FAILED') {
-            stopPolling();
-            setStatus('failed');
-            setStatusText('Generation failed. Please try again.');
-            setError('Venice audio generation failed.');
-            setProgress(0);
-          } else {
-            const avg = statusData.averageExecutionTime || 30000;
-            const elapsed = statusData.executionDuration || 0;
-            const pct = Math.min(90, 25 + (elapsed / avg) * 65);
-            setProgress(pct);
-            const remaining = Math.max(0, Math.ceil((avg - elapsed) / 1000));
-            setStatusText(`Generating your music... ~${remaining}s remaining`);
+            setCurrentTrack(track);
+            setTracks(prev => [track, ...prev].slice(0, 10));
+            setStatus('completed');
+            setStatusText('Your music is ready!');
+            setProgress(100);
+
+            // Step 5: Cleanup (fire-and-forget)
+            fetch('/api/venice/audio/complete', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ apiKey, model: selectedModel.id, queueId }),
+            }).catch(() => {});
+
+            return;
           }
-        } catch {
-          pollErrorCount.current++;
-          if (pollErrorCount.current >= 8) {
-            stopPolling();
-            setStatus('failed');
-            setStatusText('Lost connection. Please try again.');
-            setError('Too many consecutive errors while polling.');
-            setProgress(0);
+
+          if (statusData.status === 'FAILED') {
+            throw new Error('Venice audio generation failed. Please try again.');
+          }
+
+          // Still processing — update progress bar
+          const avg = statusData.averageExecutionTime || 60000;
+          const elapsed = statusData.executionDuration || 0;
+          const pct = Math.min(80, 25 + (elapsed / avg) * 55);
+          setProgress(pct);
+          const remaining = Math.max(0, Math.ceil((avg - elapsed) / 1000));
+          setStatusText(`Generating your music... ~${remaining}s remaining`);
+
+        } catch (pollErr) {
+          consecutiveErrors++;
+          if (consecutiveErrors >= 5) {
+            throw pollErr;
           }
         }
-      }, 4000);
+
+        await sleep(POLL_INTERVAL);
+      }
+
+      throw new Error('Generation timed out after 10 minutes. Please try again.');
+
     } catch (err) {
-      stopPolling();
+      if (cancelledRef.current) return;
       setStatus('failed');
       setStatusText('Something went wrong.');
       setError(err instanceof Error ? err.message : 'Unknown error');
@@ -350,10 +377,10 @@ export default function HomePage() {
     }
   }
 
-  function downloadAudio(blobUrl: string, name: string) {
+  function downloadAudio(blobUrl: string, name: string, format?: string) {
     const a = document.createElement('a');
     a.href = blobUrl;
-    const ext = selectedModel?.defaultFormat || 'mp3';
+    const ext = format || selectedModel?.defaultFormat || 'mp3';
     a.download = `${name}.${ext}`;
     document.body.appendChild(a);
     a.click();
@@ -373,7 +400,7 @@ export default function HomePage() {
     }
   }
 
-  const isGenerating = status === 'optimizing' || status === 'queued' || status === 'processing';
+  const isGenerating = status === 'optimizing' || status === 'queued' || status === 'processing' || status === 'downloading';
   const canGenerate =
     apiKey &&
     description.trim().length >= (selectedModel?.minPromptLength || 10) &&
@@ -456,7 +483,6 @@ export default function HomePage() {
         <section className="card params-card">
           <div className="section-label">{selectedModel.name} Settings</div>
 
-          {/* Prompt */}
           <div className="param-group">
             <div className="param-header">
               <span className="param-label">Music Description</span>
@@ -474,7 +500,6 @@ export default function HomePage() {
             )}
           </div>
 
-          {/* Genre + Mood */}
           <div className="chips-section">
             <span className="chips-label">Genre</span>
             <div className="chips">
@@ -493,7 +518,6 @@ export default function HomePage() {
             </div>
           </div>
 
-          {/* Duration */}
           <div className="chips-section">
             <span className="chips-label">Duration</span>
             <div className="chips">
@@ -503,7 +527,6 @@ export default function HomePage() {
             </div>
           </div>
 
-          {/* Instrumental toggle */}
           {selectedModel.supportsForceInstrumental && (
             <div className="param-group">
               <span className="param-label">Vocal Mode</span>
@@ -518,7 +541,6 @@ export default function HomePage() {
             </div>
           )}
 
-          {/* Lyrics */}
           {selectedModel.supportsLyrics && (
             <div className="param-group">
               <div className="param-header">
@@ -529,13 +551,11 @@ export default function HomePage() {
                   <span className="param-counter">{lyrics.length}/{selectedModel.lyricsCharacterLimit}</span>
                 )}
               </div>
-
               {!selectedModel.lyricsRequired && (
                 <button type="button" className="lyrics-toggle" onClick={() => setShowLyrics(!showLyrics)}>
                   {showLyrics ? 'Remove lyrics' : '+ Add custom lyrics'}
                 </button>
               )}
-
               {(showLyrics || selectedModel.lyricsRequired) && (
                 <textarea
                   className="lyrics-textarea"
@@ -554,7 +574,6 @@ export default function HomePage() {
             </div>
           )}
 
-          {/* Voice selector */}
           {selectedModel.voices.length > 0 && (
             <div className="param-group">
               <span className="param-label">Voice</span>
@@ -568,7 +587,6 @@ export default function HomePage() {
             </div>
           )}
 
-          {/* Speed slider */}
           {selectedModel.supportsSpeed && (
             <div className="param-group">
               <div className="param-header">
@@ -592,7 +610,6 @@ export default function HomePage() {
             </div>
           )}
 
-          {/* Output info + price */}
           <div className="param-info-row">
             <div className="param-info-item">
               <span className="param-info-label">Format</span>
@@ -610,8 +627,12 @@ export default function HomePage() {
             )}
           </div>
 
-          {/* Generate */}
           <div className="action-row">
+            {isGenerating ? (
+              <button type="button" className="btn-cancel" onClick={cancelGeneration}>
+                Cancel
+              </button>
+            ) : null}
             <button type="button" className="btn-generate" onClick={generate} disabled={!canGenerate}>
               {isGenerating ? statusText : `Generate with ${selectedModel.name}`}
             </button>
@@ -621,7 +642,6 @@ export default function HomePage() {
         </section>
       )}
 
-      {/* No models state */}
       {!modelsLoading && models.length === 0 && apiKey && (
         <section className="card">
           <p className="hint">No music models available. Check your API key or try again.</p>
@@ -638,26 +658,62 @@ export default function HomePage() {
         </section>
       )}
 
-      {/* Player */}
-      {currentAudioUrl && status === 'completed' && (
+      {/* Player + Generation Details */}
+      {currentAudioUrl && status === 'completed' && currentTrack && (
         <section className="card player-card">
           <div className="player-header">
             <div>
               <h3>Your Track is Ready</h3>
-              <p className="player-prompt">{description}</p>
-              {selectedModel && <span className="player-model">{selectedModel.name} &middot; {selectedModel.defaultFormat.toUpperCase()}</span>}
+              <p className="player-prompt">&ldquo;{currentTrack.prompt}&rdquo;</p>
             </div>
-            <button type="button" className="btn-download" onClick={() => downloadAudio(currentAudioUrl, description.slice(0, 30).replace(/\s+/g, '-'))}>
-              Download
+            <button type="button" className="btn-download" onClick={() => downloadAudio(currentAudioUrl, currentTrack.prompt.slice(0, 30).replace(/\s+/g, '-'), currentTrack.format)}>
+              Download .{currentTrack.format}
             </button>
           </div>
+
           <audio ref={audioRef} src={currentAudioUrl} controls className="audio-player" />
-          {currentPrompt && (
-            <details className="prompt-details">
-              <summary>View optimized prompt</summary>
-              <p>{currentPrompt}</p>
-            </details>
-          )}
+
+          {/* Generation details */}
+          <div className="generation-details">
+            <div className="gen-detail-row">
+              <span className="gen-detail-label">Model</span>
+              <span className="gen-detail-value">{currentTrack.modelName}</span>
+            </div>
+            <div className="gen-detail-row">
+              <span className="gen-detail-label">Duration</span>
+              <span className="gen-detail-value">{formatDuration(currentTrack.duration)}</span>
+            </div>
+            <div className="gen-detail-row">
+              <span className="gen-detail-label">Format</span>
+              <span className="gen-detail-value">{currentTrack.format.toUpperCase()}</span>
+            </div>
+            {currentTrack.genre && (
+              <div className="gen-detail-row">
+                <span className="gen-detail-label">Genre</span>
+                <span className="gen-detail-value">{currentTrack.genre}</span>
+              </div>
+            )}
+            {currentTrack.mood && (
+              <div className="gen-detail-row">
+                <span className="gen-detail-label">Mood</span>
+                <span className="gen-detail-value">{currentTrack.mood}</span>
+              </div>
+            )}
+          </div>
+
+          <details className="prompt-details">
+            <summary>View optimized prompt sent to AI</summary>
+            <div className="prompt-compare">
+              <div className="prompt-box">
+                <span className="prompt-box-label">Your input</span>
+                <p>{currentTrack.prompt}</p>
+              </div>
+              <div className="prompt-box optimized">
+                <span className="prompt-box-label">AI-optimized prompt</span>
+                <p>{currentTrack.optimizedPrompt}</p>
+              </div>
+            </div>
+          </details>
         </section>
       )}
 
@@ -676,10 +732,14 @@ export default function HomePage() {
                   </button>
                   <div className="history-info">
                     <span className="history-prompt">{track.prompt}</span>
-                    <span className="history-meta">{track.modelName} &middot; {formatDuration(track.duration)} &middot; {new Date(track.createdAt).toLocaleDateString()}</span>
+                    <span className="history-meta">
+                      {track.modelName} &middot; {formatDuration(track.duration)} &middot; {track.format.toUpperCase()} &middot; {new Date(track.createdAt).toLocaleDateString()}
+                    </span>
                   </div>
                   {hasAudio && (
-                    <button type="button" className="history-download" onClick={() => downloadAudio(track.audioBlobUrl, track.prompt.slice(0, 20).replace(/\s+/g, '-'))}>Save</button>
+                    <button type="button" className="history-download" onClick={() => downloadAudio(track.audioBlobUrl, track.prompt.slice(0, 20).replace(/\s+/g, '-'), track.format)}>
+                      Save
+                    </button>
                   )}
                 </div>
               );
