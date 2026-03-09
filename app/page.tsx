@@ -28,7 +28,7 @@ type Track = {
   prompt: string;
   optimizedPrompt: string;
   modelName: string;
-  audioDataUrl: string;
+  audioBlobUrl: string;
   createdAt: string;
   duration: number;
 };
@@ -103,6 +103,7 @@ export default function HomePage() {
   const [playingTrackId, setPlayingTrackId] = useState<string | null>(null);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollErrorCount = useRef(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const historyAudioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -128,7 +129,10 @@ export default function HomePage() {
   }, [apiKey]);
 
   useEffect(() => {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(tracks.slice(0, 5)));
+    const forStorage = tracks.slice(0, 5).map(t => ({ ...t, audioBlobUrl: '' }));
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(forStorage));
+    } catch { /* storage full — ignore */ }
   }, [tracks]);
 
   useEffect(() => {
@@ -236,6 +240,7 @@ export default function HomePage() {
       setProgress(25);
       setStatus('processing');
       setStatusText('Generating your music...');
+      pollErrorCount.current = 0;
 
       pollRef.current = setInterval(async () => {
         try {
@@ -246,11 +251,42 @@ export default function HomePage() {
           });
           const statusData = await statusRes.json();
 
+          if (statusData.error && statusData.status !== 'COMPLETED' && statusData.status !== 'FAILED') {
+            pollErrorCount.current++;
+            if (pollErrorCount.current >= 8) {
+              stopPolling();
+              setStatus('failed');
+              setStatusText('Lost connection to Venice. Please try again.');
+              setError(statusData.error || 'Too many polling errors.');
+              setProgress(0);
+            }
+            return;
+          }
+
+          pollErrorCount.current = 0;
+
           if (statusData.status === 'COMPLETED') {
             stopPolling();
-            const ct = statusData.contentType || 'audio/mpeg';
-            const audioDataUrl = `data:${ct};base64,${statusData.audio}`;
-            setCurrentAudioUrl(audioDataUrl);
+            setProgress(90);
+            setStatusText('Downloading your track...');
+
+            const audioRes = await fetch('/api/venice/audio/status', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ apiKey, model: selectedModel.id, queueId, downloadAudio: true }),
+            });
+
+            if (!audioRes.ok) {
+              setStatus('failed');
+              setStatusText('Audio download failed.');
+              setError('Could not download the generated audio.');
+              setProgress(0);
+              return;
+            }
+
+            const audioBlob = await audioRes.blob();
+            const audioBlobUrl = URL.createObjectURL(audioBlob);
+            setCurrentAudioUrl(audioBlobUrl);
             setStatus('completed');
             setStatusText('Your music is ready!');
             setProgress(100);
@@ -260,7 +296,7 @@ export default function HomePage() {
               prompt: description.trim(),
               optimizedPrompt,
               modelName: selectedModel.name,
-              audioDataUrl,
+              audioBlobUrl,
               createdAt: new Date().toISOString(),
               duration,
             };
@@ -274,12 +310,21 @@ export default function HomePage() {
           } else {
             const avg = statusData.averageExecutionTime || 30000;
             const elapsed = statusData.executionDuration || 0;
-            const pct = Math.min(95, 25 + (elapsed / avg) * 70);
+            const pct = Math.min(90, 25 + (elapsed / avg) * 65);
             setProgress(pct);
             const remaining = Math.max(0, Math.ceil((avg - elapsed) / 1000));
             setStatusText(`Generating your music... ~${remaining}s remaining`);
           }
-        } catch { /* keep polling on transient errors */ }
+        } catch {
+          pollErrorCount.current++;
+          if (pollErrorCount.current >= 8) {
+            stopPolling();
+            setStatus('failed');
+            setStatusText('Lost connection. Please try again.');
+            setError('Too many consecutive errors while polling.');
+            setProgress(0);
+          }
+        }
       }, 4000);
     } catch (err) {
       stopPolling();
@@ -290,9 +335,9 @@ export default function HomePage() {
     }
   }
 
-  function downloadAudio(dataUrl: string, name: string) {
+  function downloadAudio(blobUrl: string, name: string) {
     const a = document.createElement('a');
-    a.href = dataUrl;
+    a.href = blobUrl;
     const ext = selectedModel?.defaultFormat || 'mp3';
     a.download = `${name}.${ext}`;
     document.body.appendChild(a);
@@ -307,7 +352,7 @@ export default function HomePage() {
       return;
     }
     if (historyAudioRef.current) {
-      historyAudioRef.current.src = track.audioDataUrl;
+      historyAudioRef.current.src = track.audioBlobUrl;
       historyAudioRef.current.play();
       setPlayingTrackId(track.id);
     }
@@ -562,30 +607,36 @@ export default function HomePage() {
           <div className="section-label">Recent Tracks</div>
           <audio ref={historyAudioRef} onEnded={() => setPlayingTrackId(null)} style={{ display: 'none' }} />
           <div className="history-list">
-            {tracks.map(track => (
-              <div key={track.id} className="history-item">
-                <button
-                  type="button"
-                  className="history-play"
-                  onClick={() => playHistoryTrack(track)}
-                >
-                  {playingTrackId === track.id ? '||' : '\u25B6'}
-                </button>
-                <div className="history-info">
-                  <span className="history-prompt">{track.prompt}</span>
-                  <span className="history-meta">
-                    {track.modelName} &middot; {formatDuration(track.duration)} &middot; {new Date(track.createdAt).toLocaleDateString()}
-                  </span>
+            {tracks.map(track => {
+              const hasAudio = !!track.audioBlobUrl;
+              return (
+                <div key={track.id} className="history-item">
+                  <button
+                    type="button"
+                    className={`history-play ${!hasAudio ? 'disabled' : ''}`}
+                    onClick={() => hasAudio && playHistoryTrack(track)}
+                    disabled={!hasAudio}
+                  >
+                    {playingTrackId === track.id ? '||' : '\u25B6'}
+                  </button>
+                  <div className="history-info">
+                    <span className="history-prompt">{track.prompt}</span>
+                    <span className="history-meta">
+                      {track.modelName} &middot; {formatDuration(track.duration)} &middot; {new Date(track.createdAt).toLocaleDateString()}
+                    </span>
+                  </div>
+                  {hasAudio && (
+                    <button
+                      type="button"
+                      className="history-download"
+                      onClick={() => downloadAudio(track.audioBlobUrl, track.prompt.slice(0, 20).replace(/\s+/g, '-'))}
+                    >
+                      Save
+                    </button>
+                  )}
                 </div>
-                <button
-                  type="button"
-                  className="history-download"
-                  onClick={() => downloadAudio(track.audioDataUrl, track.prompt.slice(0, 20).replace(/\s+/g, '-'))}
-                >
-                  Save
-                </button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </section>
       )}

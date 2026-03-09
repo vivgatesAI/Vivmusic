@@ -672,9 +672,14 @@ input, textarea, select {
   flex-shrink: 0;
   transition: all 200ms;
 }
-.history-play:hover {
+.history-play:hover:not(:disabled) {
   box-shadow: 0 0 14px var(--glow-orange);
   transform: scale(1.08);
+}
+.history-play.disabled,
+.history-play:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
 }
 
 .history-info {

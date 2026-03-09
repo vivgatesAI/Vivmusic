@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server';
 
+export const maxDuration = 120;
+
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { apiKey, model, queueId } = body ?? {};
+    const { apiKey, model, queueId, downloadAudio } = body ?? {};
 
     if (!apiKey) {
       return NextResponse.json({ error: 'Missing Venice API key.' }, { status: 400 });
@@ -21,23 +23,50 @@ export async function POST(request: Request) {
       body: JSON.stringify({
         model: model || 'elevenlabs-music',
         queue_id: queueId,
-        delete_media_on_completion: true,
+        delete_media_on_completion: !!downloadAudio,
       }),
     });
 
     if (!response.ok) {
-      const text = await response.text();
-      return NextResponse.json({ error: text || 'Venice audio retrieve failed.' }, { status: response.status });
+      let errorText: string;
+      try {
+        errorText = await response.text();
+      } catch {
+        errorText = `Venice returned ${response.status}`;
+      }
+      return NextResponse.json({ error: errorText }, { status: response.status });
     }
 
-    const data = await response.json();
+    let data: Record<string, unknown>;
+    try {
+      const rawText = await response.text();
+      data = JSON.parse(rawText);
+    } catch {
+      return NextResponse.json({ error: 'Failed to parse Venice response.' }, { status: 502 });
+    }
 
     if (data.status === 'COMPLETED') {
+      if (downloadAudio && data.audio) {
+        const contentType = (data.content_type as string) || 'audio/mpeg';
+        const audioBuffer = Buffer.from(data.audio as string, 'base64');
+        return new Response(audioBuffer, {
+          status: 200,
+          headers: {
+            'Content-Type': contentType,
+            'Content-Length': String(audioBuffer.length),
+            'Content-Disposition': 'attachment; filename="vivmusic-track.mp3"',
+          },
+        });
+      }
+
       return NextResponse.json({
         status: 'COMPLETED',
-        audio: data.audio,
-        contentType: data.content_type || 'audio/mpeg',
+        contentType: (data.content_type as string) || 'audio/mpeg',
       });
+    }
+
+    if (data.status === 'FAILED') {
+      return NextResponse.json({ status: 'FAILED', error: 'Generation failed on Venice side.' });
     }
 
     return NextResponse.json({
