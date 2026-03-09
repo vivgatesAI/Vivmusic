@@ -341,9 +341,10 @@ export default function HomePage() {
           <span className={`chevron ${showKey ? 'open' : ''}`} />
         </button>
         {showKey && (
-          <div className="key-body">
+          <form className="key-body" onSubmit={e => { e.preventDefault(); setShowKey(false); }}>
             <input
               type="password"
+              autoComplete="off"
               value={apiKey}
               onChange={e => setApiKey(e.target.value)}
               placeholder="Paste your Venice API key (vn_...)"
@@ -354,7 +355,7 @@ export default function HomePage() {
                 venice.ai/settings/api
               </a>
             </p>
-          </div>
+          </form>
         )}
       </section>
 
