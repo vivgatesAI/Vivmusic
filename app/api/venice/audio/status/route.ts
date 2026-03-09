@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { apiKey, queueId } = body ?? {};
+    const { apiKey, model, queueId } = body ?? {};
 
     if (!apiKey) {
       return NextResponse.json({ error: 'Missing Venice API key.' }, { status: 400 });
@@ -19,7 +19,7 @@ export async function POST(request: Request) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'elevenlabs-music',
+        model: model || 'elevenlabs-music',
         queue_id: queueId,
         delete_media_on_completion: true,
       }),

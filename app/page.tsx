@@ -2,32 +2,89 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+type MusicModel = {
+  id: string;
+  name: string;
+  description: string;
+  supportsLyrics: boolean;
+  lyricsRequired: boolean;
+  supportsForceInstrumental: boolean;
+  durationOptions: number[] | null;
+  minDuration: number | null;
+  maxDuration: number | null;
+  defaultDuration: number;
+  supportedFormats: string[];
+  defaultFormat: string;
+  promptCharacterLimit: number;
+  lyricsCharacterLimit: number | null;
+  minPromptLength: number;
+  pricing: Record<string, unknown>;
+};
+
 type GenerationStatus = 'idle' | 'optimizing' | 'queued' | 'processing' | 'completed' | 'failed';
 
 type Track = {
   id: string;
   prompt: string;
   optimizedPrompt: string;
+  modelName: string;
   audioDataUrl: string;
   createdAt: string;
   duration: number;
 };
 
 const API_KEY_STORAGE = 'vivmusic.apiKey';
-const HISTORY_KEY = 'vivmusic.tracks';
+const HISTORY_KEY = 'vivmusic.tracks.v2';
 
-const genres = ['Cinematic', 'Lo-fi', 'Electronic', 'Ambient', 'Pop', 'Hip-Hop'] as const;
-const moods = ['Uplifting', 'Chill', 'Dark', 'Energetic', 'Emotional', 'Futuristic'] as const;
-const durations = [
-  { label: '30s', value: 30 },
-  { label: '60s', value: 60 },
-  { label: '90s', value: 90 },
-  { label: '2 min', value: 120 },
-] as const;
+const genres = ['Cinematic', 'Lo-fi', 'Electronic', 'Ambient', 'Pop', 'Hip-Hop', 'Rock', 'Jazz'] as const;
+const moods = ['Uplifting', 'Chill', 'Dark', 'Energetic', 'Emotional', 'Futuristic', 'Dreamy', 'Intense'] as const;
+
+function getDurationOptions(model: MusicModel): number[] {
+  if (model.durationOptions) return model.durationOptions;
+  if (model.minDuration != null && model.maxDuration != null) {
+    const options: number[] = [];
+    for (let d = model.minDuration; d <= model.maxDuration; d += 30) {
+      options.push(d);
+    }
+    if (!options.includes(model.maxDuration)) options.push(model.maxDuration);
+    return options.slice(0, 8);
+  }
+  return [30, 60, 90, 120];
+}
+
+function formatDuration(s: number): string {
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return rem ? `${m}m ${rem}s` : `${m}m`;
+}
+
+function formatPrice(model: MusicModel, duration: number): string {
+  const p = model.pricing as Record<string, unknown>;
+  if (p.durations) {
+    const durations = p.durations as Record<string, Record<string, number>>;
+    const d = durations[String(duration)];
+    if (d?.usd != null) return `$${d.usd.toFixed(2)}`;
+  }
+  if (p.generation) {
+    const g = p.generation as Record<string, number>;
+    if (g.usd != null) return `$${g.usd.toFixed(2)}`;
+  }
+  if (p.per_second) {
+    const ps = p.per_second as Record<string, number>;
+    if (ps.usd != null) return `$${(ps.usd * duration).toFixed(2)}`;
+  }
+  return '';
+}
 
 export default function HomePage() {
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
+
+  const [models, setModels] = useState<MusicModel[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [selectedModelId, setSelectedModelId] = useState('');
+
   const [description, setDescription] = useState('');
   const [genre, setGenre] = useState<string | null>(null);
   const [mood, setMood] = useState<string | null>(null);
@@ -35,11 +92,11 @@ export default function HomePage() {
   const [instrumental, setInstrumental] = useState(true);
   const [showLyrics, setShowLyrics] = useState(false);
   const [lyrics, setLyrics] = useState('');
+
   const [status, setStatus] = useState<GenerationStatus>('idle');
   const [statusText, setStatusText] = useState('');
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState('');
-  const [quote, setQuote] = useState<number | null>(null);
   const [currentAudioUrl, setCurrentAudioUrl] = useState<string | null>(null);
   const [currentPrompt, setCurrentPrompt] = useState('');
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -48,6 +105,13 @@ export default function HomePage() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const historyAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  const selectedModel = models.find(m => m.id === selectedModelId) || null;
+  const durationOpts = selectedModel ? getDurationOptions(selectedModel) : [30, 60, 90, 120];
+  const canHaveLyrics = selectedModel?.supportsLyrics || false;
+  const lyricsRequired = selectedModel?.lyricsRequired || false;
+  const canForceInstrumental = selectedModel?.supportsForceInstrumental || false;
+  const priceEstimate = selectedModel ? formatPrice(selectedModel, duration) : '';
 
   useEffect(() => {
     try {
@@ -67,6 +131,47 @@ export default function HomePage() {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(tracks.slice(0, 5)));
   }, [tracks]);
 
+  useEffect(() => {
+    if (!apiKey) return;
+    let cancelled = false;
+    setModelsLoading(true);
+    fetch('/api/venice/models', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey }),
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (cancelled) return;
+        const list: MusicModel[] = data.models || [];
+        setModels(list);
+        if (list.length && !selectedModelId) {
+          setSelectedModelId(list[0].id);
+        }
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setModelsLoading(false); });
+    return () => { cancelled = true; };
+  }, [apiKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (selectedModel) {
+      const opts = getDurationOptions(selectedModel);
+      if (!opts.includes(duration)) setDuration(selectedModel.defaultDuration);
+      if (!selectedModel.supportsLyrics) {
+        setShowLyrics(false);
+        setLyrics('');
+      }
+      if (selectedModel.lyricsRequired) {
+        setShowLyrics(true);
+        setInstrumental(false);
+      }
+      if (!selectedModel.supportsForceInstrumental) {
+        setInstrumental(false);
+      }
+    }
+  }, [selectedModelId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
       clearInterval(pollRef.current);
@@ -74,31 +179,18 @@ export default function HomePage() {
     }
   }, []);
 
-  async function getQuote() {
-    setError('');
-    try {
-      const res = await fetch('/api/venice/audio/quote', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiKey, durationSeconds: duration }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || 'Quote failed');
-      setQuote(data.quote);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Quote failed');
-    }
-  }
-
   async function generate() {
-    if (!apiKey || !description.trim()) return;
+    if (!apiKey || !description.trim() || !selectedModel) return;
+    if (lyricsRequired && !lyrics.trim()) {
+      setError(`${selectedModel.name} requires lyrics. Please add them below.`);
+      return;
+    }
 
     setError('');
     setStatus('optimizing');
     setStatusText('AI is crafting the perfect prompt...');
     setProgress(5);
     setCurrentAudioUrl(null);
-    setQuote(null);
 
     try {
       const optRes = await fetch('/api/venice/producer', {
@@ -110,8 +202,10 @@ export default function HomePage() {
           genre,
           mood,
           duration,
-          instrumental,
-          lyrics: showLyrics ? lyrics : undefined,
+          instrumental: canForceInstrumental && instrumental,
+          lyrics: canHaveLyrics && lyrics ? lyrics : undefined,
+          modelName: selectedModel.name,
+          promptLimit: selectedModel.promptCharacterLimit,
         }),
       });
       const optData = await optRes.json();
@@ -128,10 +222,11 @@ export default function HomePage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           apiKey,
+          model: selectedModel.id,
           prompt: optimizedPrompt,
           durationSeconds: duration,
-          forceInstrumental: instrumental,
-          lyricsPrompt: showLyrics && lyrics ? lyrics : undefined,
+          forceInstrumental: canForceInstrumental && instrumental,
+          lyricsPrompt: canHaveLyrics && lyrics ? lyrics : undefined,
         }),
       });
       const queueData = await queueRes.json();
@@ -147,13 +242,14 @@ export default function HomePage() {
           const statusRes = await fetch('/api/venice/audio/status', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ apiKey, queueId }),
+            body: JSON.stringify({ apiKey, model: selectedModel.id, queueId }),
           });
           const statusData = await statusRes.json();
 
           if (statusData.status === 'COMPLETED') {
             stopPolling();
-            const audioDataUrl = `data:${statusData.contentType || 'audio/mpeg'};base64,${statusData.audio}`;
+            const ct = statusData.contentType || 'audio/mpeg';
+            const audioDataUrl = `data:${ct};base64,${statusData.audio}`;
             setCurrentAudioUrl(audioDataUrl);
             setStatus('completed');
             setStatusText('Your music is ready!');
@@ -163,6 +259,7 @@ export default function HomePage() {
               id: `track-${Date.now()}`,
               prompt: description.trim(),
               optimizedPrompt,
+              modelName: selectedModel.name,
               audioDataUrl,
               createdAt: new Date().toISOString(),
               duration,
@@ -179,13 +276,10 @@ export default function HomePage() {
             const elapsed = statusData.executionDuration || 0;
             const pct = Math.min(95, 25 + (elapsed / avg) * 70);
             setProgress(pct);
-
             const remaining = Math.max(0, Math.ceil((avg - elapsed) / 1000));
             setStatusText(`Generating your music... ~${remaining}s remaining`);
           }
-        } catch {
-          // keep polling on transient errors
-        }
+        } catch { /* keep polling on transient errors */ }
       }, 4000);
     } catch (err) {
       stopPolling();
@@ -199,7 +293,8 @@ export default function HomePage() {
   function downloadAudio(dataUrl: string, name: string) {
     const a = document.createElement('a');
     a.href = dataUrl;
-    a.download = `${name}.mp3`;
+    const ext = selectedModel?.defaultFormat || 'mp3';
+    a.download = `${name}.${ext}`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -219,22 +314,30 @@ export default function HomePage() {
   }
 
   const isGenerating = status === 'optimizing' || status === 'queued' || status === 'processing';
-  const canGenerate = apiKey && description.trim() && !isGenerating;
+  const canGenerate = apiKey && description.trim().length >= (selectedModel?.minPromptLength || 10) && selectedModel && !isGenerating;
 
   return (
     <main className="app-shell">
+      {/* Decorative elements */}
+      <div className="deco-ring deco-ring-1" />
+      <div className="deco-ring deco-ring-2" />
+      <div className="scanlines" />
+
       <header className="app-header">
         <div className="brand">
-          <div className="brand-dot" />
-          <h1>VivMusic</h1>
+          <div className="brand-eye" />
+          <div>
+            <h1>VivMusic</h1>
+            <p className="tagline">Yesterday&apos;s tomorrow, today.</p>
+          </div>
         </div>
-        <p className="tagline">Studio-quality music from a single sentence</p>
       </header>
 
       {/* API Key */}
       <section className="card key-card">
         <button type="button" className="key-toggle" onClick={() => setShowKey(!showKey)}>
-          {apiKey ? 'API Key Saved' : 'Add Venice API Key'}
+          <span className="key-dot" />
+          {apiKey ? 'API Key Connected' : 'Connect Venice API Key'}
           <span className={`chevron ${showKey ? 'open' : ''}`} />
         </button>
         {showKey && (
@@ -249,24 +352,53 @@ export default function HomePage() {
               Get a free key at{' '}
               <a href="https://venice.ai/settings/api" target="_blank" rel="noopener noreferrer">
                 venice.ai/settings/api
-              </a>. Stored only in your browser.
+              </a>
             </p>
           </div>
         )}
       </section>
 
-      {/* Main Create Card */}
+      {/* Model Selector */}
+      {models.length > 0 && (
+        <section className="card model-card">
+          <div className="section-label">Select AI Model</div>
+          <div className="model-grid">
+            {models.map(m => (
+              <button
+                key={m.id}
+                type="button"
+                className={`model-option ${selectedModelId === m.id ? 'active' : ''}`}
+                onClick={() => setSelectedModelId(m.id)}
+              >
+                <strong>{m.name}</strong>
+                <span className="model-desc">{m.description}</span>
+                <div className="model-tags">
+                  {m.supportsLyrics && <span className="mtag lyrics-tag">Lyrics</span>}
+                  {m.supportsForceInstrumental && <span className="mtag inst-tag">Instrumental</span>}
+                  <span className="mtag format-tag">{m.defaultFormat.toUpperCase()}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+          {modelsLoading && <p className="hint">Loading models...</p>}
+        </section>
+      )}
+
+      {/* Create Card */}
       <section className="card create-card">
-        <label className="field-label" htmlFor="description">
-          Describe the music you want
-        </label>
+        <div className="section-label">Describe Your Sound</div>
         <textarea
-          id="description"
           value={description}
           onChange={e => setDescription(e.target.value)}
-          placeholder='e.g. "Upbeat electronic track for a product launch video, building energy with a big drop"'
+          placeholder='e.g. "Upbeat electronic track for a product launch, building energy with a massive drop"'
           rows={3}
+          maxLength={selectedModel?.promptCharacterLimit || 500}
         />
+        {selectedModel && (
+          <div className="char-count">
+            {description.length}/{selectedModel.promptCharacterLimit}
+          </div>
+        )}
 
         <div className="chips-section">
           <span className="chips-label">Genre</span>
@@ -303,52 +435,66 @@ export default function HomePage() {
         <div className="chips-section">
           <span className="chips-label">Duration</span>
           <div className="chips">
-            {durations.map(d => (
+            {durationOpts.map(d => (
               <button
-                key={d.value}
+                key={d}
                 type="button"
-                className={`chip ${duration === d.value ? 'active' : ''}`}
-                onClick={() => setDuration(d.value)}
+                className={`chip ${duration === d ? 'active' : ''}`}
+                onClick={() => setDuration(d)}
               >
-                {d.label}
+                {formatDuration(d)}
               </button>
             ))}
           </div>
         </div>
 
-        <div className="toggle-row">
-          <button
-            type="button"
-            className={`toggle-btn ${instrumental ? 'active' : ''}`}
-            onClick={() => { setInstrumental(true); setShowLyrics(false); }}
-          >
-            Instrumental
-          </button>
-          <button
-            type="button"
-            className={`toggle-btn ${!instrumental ? 'active' : ''}`}
-            onClick={() => setInstrumental(false)}
-          >
-            With Vocals
-          </button>
-        </div>
-
-        {!instrumental && (
-          <div className="lyrics-section">
+        {/* Instrumental toggle — only if model supports it */}
+        {canForceInstrumental && (
+          <div className="toggle-row">
             <button
               type="button"
-              className="lyrics-toggle"
-              onClick={() => setShowLyrics(!showLyrics)}
+              className={`toggle-btn ${instrumental ? 'active' : ''}`}
+              onClick={() => { setInstrumental(true); setShowLyrics(false); }}
             >
-              {showLyrics ? 'Hide lyrics' : 'Add custom lyrics (optional)'}
+              Instrumental
             </button>
-            {showLyrics && (
-              <textarea
-                value={lyrics}
-                onChange={e => setLyrics(e.target.value)}
-                placeholder="Verse 1: Walking through the city lights..."
-                rows={4}
-              />
+            <button
+              type="button"
+              className={`toggle-btn ${!instrumental ? 'active' : ''}`}
+              onClick={() => setInstrumental(false)}
+            >
+              With Vocals
+            </button>
+          </div>
+        )}
+
+        {/* Lyrics — if model supports or requires them */}
+        {canHaveLyrics && (
+          <div className="lyrics-section">
+            {!lyricsRequired && (
+              <button
+                type="button"
+                className="lyrics-toggle"
+                onClick={() => setShowLyrics(!showLyrics)}
+              >
+                {showLyrics ? 'Hide lyrics' : '+ Add custom lyrics'}
+              </button>
+            )}
+            {(showLyrics || lyricsRequired) && (
+              <>
+                <textarea
+                  value={lyrics}
+                  onChange={e => setLyrics(e.target.value)}
+                  placeholder={lyricsRequired
+                    ? 'Lyrics are required for this model. Add verse/chorus structure...'
+                    : 'Verse 1: Walking through the city lights...'}
+                  rows={5}
+                  maxLength={selectedModel?.lyricsCharacterLimit || 4096}
+                />
+                {lyricsRequired && !lyrics.trim() && (
+                  <p className="lyrics-required-hint">This model requires lyrics to generate.</p>
+                )}
+              </>
             )}
           </div>
         )}
@@ -362,14 +508,11 @@ export default function HomePage() {
           >
             {isGenerating ? statusText : 'Generate Music'}
           </button>
-          <button
-            type="button"
-            className="btn-quote"
-            onClick={getQuote}
-            disabled={!apiKey}
-          >
-            {quote !== null ? `~$${quote.toFixed(2)}` : 'Estimate Cost'}
-          </button>
+          {priceEstimate && (
+            <div className="price-badge">
+              {priceEstimate}
+            </div>
+          )}
         </div>
 
         {error && <p className="error-msg">{error}</p>}
@@ -390,15 +533,16 @@ export default function HomePage() {
         <section className="card player-card">
           <div className="player-header">
             <div>
-              <h3>Your Track</h3>
+              <h3>Your Track is Ready</h3>
               <p className="player-prompt">{description}</p>
+              {selectedModel && <span className="player-model">{selectedModel.name}</span>}
             </div>
             <button
               type="button"
               className="btn-download"
               onClick={() => downloadAudio(currentAudioUrl, description.slice(0, 30).replace(/\s+/g, '-'))}
             >
-              Download MP3
+              Download
             </button>
           </div>
           <audio ref={audioRef} src={currentAudioUrl} controls className="audio-player" />
@@ -414,7 +558,7 @@ export default function HomePage() {
       {/* History */}
       {tracks.length > 0 && (
         <section className="card history-card">
-          <h3>Recent Tracks</h3>
+          <div className="section-label">Recent Tracks</div>
           <audio ref={historyAudioRef} onEnded={() => setPlayingTrackId(null)} style={{ display: 'none' }} />
           <div className="history-list">
             {tracks.map(track => (
@@ -424,12 +568,12 @@ export default function HomePage() {
                   className="history-play"
                   onClick={() => playHistoryTrack(track)}
                 >
-                  {playingTrackId === track.id ? '⏸' : '▶'}
+                  {playingTrackId === track.id ? '||' : '\u25B6'}
                 </button>
                 <div className="history-info">
                   <span className="history-prompt">{track.prompt}</span>
                   <span className="history-meta">
-                    {track.duration}s &middot; {new Date(track.createdAt).toLocaleDateString()}
+                    {track.modelName} &middot; {formatDuration(track.duration)} &middot; {new Date(track.createdAt).toLocaleDateString()}
                   </span>
                 </div>
                 <button

@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { apiKey, prompt, lyricsPrompt, durationSeconds, forceInstrumental } = body ?? {};
+    const { apiKey, model, prompt, lyricsPrompt, durationSeconds, forceInstrumental } = body ?? {};
 
     if (!apiKey) {
       return NextResponse.json({ error: 'Missing Venice API key.' }, { status: 400 });
@@ -13,7 +13,7 @@ export async function POST(request: Request) {
     }
 
     const payload: Record<string, unknown> = {
-      model: 'elevenlabs-music',
+      model: model || 'elevenlabs-music',
       prompt,
     };
 
