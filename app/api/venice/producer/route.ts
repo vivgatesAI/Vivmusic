@@ -1,72 +1,56 @@
 import { NextResponse } from 'next/server';
 
-const SYSTEM_PROMPT = `You are a world-class AI music producer helping users develop tracks like professionals. Return compact JSON only. Be specific, practical, and music-focused. Avoid copyrighted imitation. Help with structure, mood, instrumentation, lyrics direction, and refinement steps.`;
+const SYSTEM_PROMPT = `You are a world-class AI music producer. The user will give you a casual description of the music they want. Your job is to rewrite it into a concise, detailed, professional music production prompt optimized for an AI music generation model. Include genre, instrumentation, mood, tempo, structure, and sonic character. Keep it under 200 words. Return ONLY the optimized prompt text as a JSON string — no explanation.`;
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { apiKey, title, brief, useCase, mode, tags, lyricNotes } = body ?? {};
+    const { apiKey, description, genre, mood, duration, instrumental, lyrics } = body ?? {};
 
     if (!apiKey) {
       return NextResponse.json({ error: 'Missing Venice API key.' }, { status: 400 });
     }
-
-    if (!brief) {
-      return NextResponse.json({ error: 'Missing creative brief.' }, { status: 400 });
+    if (!description) {
+      return NextResponse.json({ error: 'Missing music description.' }, { status: 400 });
     }
 
-    const prompt = [
-      `Project title: ${title || 'Untitled'}`,
-      `Use case: ${useCase || 'General music creation'}`,
-      `Mode: ${mode || 'Guided Pro'}`,
-      `Tags: ${Array.isArray(tags) ? tags.join(', ') : ''}`,
-      `Lyric notes: ${lyricNotes || 'None provided'}`,
-      `Creative brief: ${brief}`,
-      '',
-      'Return JSON with this exact shape:',
-      '{',
-      '  "optimizedPrompt": string,',
-      '  "arrangement": string[],',
-      '  "instrumentation": string[],',
-      '  "lyricsDirection": string[],',
-      '  "producerNotes": string[],',
-      '  "nextRefinements": string[]',
-      '}'
-    ].join('\n');
+    const parts = [`Music description: ${description}`];
+    if (genre) parts.push(`Genre: ${genre}`);
+    if (mood) parts.push(`Mood: ${mood}`);
+    if (duration) parts.push(`Target duration: ${duration} seconds`);
+    if (instrumental) parts.push('Style: Instrumental only, no vocals');
+    if (lyrics) parts.push(`Lyrics/vocal direction: ${lyrics}`);
+
+    parts.push('', 'Return JSON: { "optimizedPrompt": "your optimized prompt here" }');
 
     const veniceResponse = await fetch('https://api.venice.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
       },
       body: JSON.stringify({
         model: 'venice-uncensored',
         messages: [
           { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: prompt }
+          { role: 'user', content: parts.join('\n') },
         ],
         temperature: 0.7,
         response_format: {
           type: 'json_schema',
           json_schema: {
-            name: 'music_producer_plan',
+            name: 'optimized_prompt',
             schema: {
               type: 'object',
               additionalProperties: false,
               properties: {
                 optimizedPrompt: { type: 'string' },
-                arrangement: { type: 'array', items: { type: 'string' } },
-                instrumentation: { type: 'array', items: { type: 'string' } },
-                lyricsDirection: { type: 'array', items: { type: 'string' } },
-                producerNotes: { type: 'array', items: { type: 'string' } },
-                nextRefinements: { type: 'array', items: { type: 'string' } }
               },
-              required: ['optimizedPrompt', 'arrangement', 'instrumentation', 'lyricsDirection', 'producerNotes', 'nextRefinements']
-            }
-          }
-        }
-      })
+              required: ['optimizedPrompt'],
+            },
+          },
+        },
+      }),
     });
 
     if (!veniceResponse.ok) {
@@ -81,7 +65,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'No content returned from Venice.' }, { status: 500 });
     }
 
-    return NextResponse.json(JSON.parse(content));
+    const parsed = JSON.parse(content);
+    return NextResponse.json({ optimizedPrompt: parsed.optimizedPrompt });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return NextResponse.json({ error: message }, { status: 500 });
